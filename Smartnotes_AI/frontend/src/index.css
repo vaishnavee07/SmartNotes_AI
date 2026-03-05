@@ -82,3 +82,24 @@
 ::-webkit-scrollbar-thumb:hover {
   @apply bg-slate-400;
 }
+
+/* ── PDF Export: prevent content from being sliced across pages ── */
+#pdf-content h1,
+#pdf-content h2,
+#pdf-content h3,
+#pdf-content h4,
+#pdf-content strong,
+#pdf-content p,
+#pdf-content li,
+#pdf-content section,
+#pdf-content .pdf-block {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+#pdf-content h1,
+#pdf-content h2,
+#pdf-content h3 {
+  page-break-after: avoid;
+  break-after: avoid;
+}

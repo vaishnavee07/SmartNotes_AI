@@ -7,6 +7,7 @@ const Flashcard = require('../models/Flashcard');
 const { addXp, XP_RULES } = require('../services/gamificationService');
 const { analyzeQuizPerformance } = require('../services/analyticsService');
 const { callGroq } = require('../utils/aiService');
+const { generateUniversityFlashcards } = require('../services/llmService');
 const Note = require('../models/Note');
 const QuestionPaper = require('../models/QuestionPaper');
 
@@ -553,62 +554,13 @@ router.post('/flashcard/generate', protect, aiLimiter, async (req, res) => {
         }
 
         console.log("Original summary length:", text.length);
-        const safeText = text.slice(0, 4000);
 
-        const messages = [
-            {
-                role: 'system',
-                content: `Generate exam-oriented revision flashcards from the text.
-
-Rules:
-- Include only important and high-weight topics.
-- Return:
-   4 × 2-mark questions (short definition style answers)
-   3 × 5-mark questions (medium explanation answers)
-   2 × 10-mark questions (detailed explanation answers)
-- Answers must match expected university writing style.
-- No MCQs.
-- No filler content.
-
-Return STRICT JSON:
-
-{
-  "twoMark": [
-    { "question": "...", "answer": "..." }
-  ],
-  "fiveMark": [
-    { "question": "...", "answer": "..." }
-  ],
-  "tenMark": [
-    { "question": "...", "answer": "..." }
-  ]
-}
-
-Return only valid JSON.`
-            },
-            {
-                role: 'user',
-                content: `Text:\n${safeText}`
-            }
-        ];
-
+        // Use the new university-style flashcard generator
         let generatedCards = null;
         try {
-            messages[1].content = `Text:\n${safeText}`;
-            const output = await callGroq(messages);
-
-            const raw = output.trim();
-            const jsonStart = raw.indexOf("{");
-            const jsonEnd = raw.lastIndexOf("}");
-
-            if (jsonStart === -1 || jsonEnd === -1) {
-                throw new Error("Invalid JSON returned from LLM");
-            }
-
-            const jsonString = raw.slice(jsonStart, jsonEnd + 1);
-            generatedCards = JSON.parse(jsonString);
+            generatedCards = await generateUniversityFlashcards(text);
         } catch (err) {
-            console.error("JSON Parse/Generation Error:", err);
+            console.error("Flashcard Generation Error:", err);
             return res.status(500).json({ error: 'LLM Error: ' + err.message });
         }
 
@@ -658,14 +610,33 @@ router.get('/explain/:id', protect, aiLimiter, async (req, res) => {
         console.log("Original summary length:", text.length);
         const safeText = text.slice(0, 2500);
 
+        const getEli5Prompt = (summaryText) => `
+You are explaining the following academic content to a 5-year-old child.
+
+STRICT INSTRUCTIONS:
+
+- Use very simple words.
+- Use short sentences.
+- Use friendly tone.
+- Use real-life examples if possible.
+- Avoid technical jargon.
+- Break complex ideas into tiny understandable pieces.
+- Keep explanation short and clear.
+- Do NOT format academically.
+- Make it feel like you are talking to a child.
+
+Content to explain:
+${summaryText}
+`;
+
         const messages = [
             {
                 role: 'system',
-                content: 'You are an enthusiastic elementary school teacher. Explain the following text so that a 5-year-old child can easily understand it. Use simple words, fun analogies, and a friendly tone. Limit to 3 short paragraphs.'
+                content: 'You are an enthusiastic elementary school teacher.'
             },
             {
                 role: 'user',
-                content: `Text to explain:\n${safeText}`
+                content: getEli5Prompt(safeText)
             }
         ];
 
@@ -674,12 +645,12 @@ router.get('/explain/:id', protect, aiLimiter, async (req, res) => {
             if (safeText.length > 4000) {
                 const chunks = chunkText(safeText, 3000);
                 for (const chunk of chunks) {
-                    messages[1].content = `Text to explain:\n${chunk}`;
+                    messages[1].content = getEli5Prompt(chunk);
                     const output = await callGroq(messages);
                     combinedOutput += output + "\n\n";
                 }
             } else {
-                messages[1].content = `Text to explain:\n${safeText}`;
+                messages[1].content = getEli5Prompt(safeText);
                 combinedOutput = await callGroq(messages);
             }
 
@@ -693,6 +664,147 @@ router.get('/explain/:id', protect, aiLimiter, async (req, res) => {
     } catch (error) {
         console.error('Explain Error:', error);
         res.status(500).json({ error: error.message || 'Failed to generate explanation' });
+    }
+});
+
+// @desc    Generate notes from text input
+// @route   POST /api/study/generate-notes
+// @access  Private
+router.post('/generate-notes', protect, aiLimiter, async (req, res) => {
+    try {
+        const { text, title } = req.body;
+
+        if (!text || text.trim().length === 0) {
+            return res.status(400).json({ error: 'Please provide text content' });
+        }
+
+        const { generateNotesFromText } = require('../services/llmService');
+        const { preprocessText, extractKeywords } = require('../services/nlpService');
+
+        // Generate smart study notes
+        const notes = await generateNotesFromText(text);
+        
+        // Process text for keywords
+        const tokens = preprocessText(text);
+        const keywords = extractKeywords(text);
+
+        // Save to database if title provided
+        if (title) {
+            const note = await Note.create({
+                userId: req.user.id,
+                title: title || 'Text Input Note',
+                sourceType: 'text',
+                rawContent: text,
+                processedContent: tokens.join(' '),
+                keywords: keywords,
+                summary: notes,
+                content: notes
+            });
+            
+            return res.status(201).json({ 
+                success: true,
+                notes: notes,
+                noteId: note._id 
+            });
+        }
+
+        res.json({ success: true, notes: notes });
+    } catch (error) {
+        console.error('Generate Notes Error:', error);
+        res.status(500).json({ error: 'Failed to generate notes: ' + error.message });
+    }
+});
+
+// @desc    Analyze YouTube video and generate notes
+// @route   POST /api/study/analyze-youtube
+// @access  Private
+router.post('/analyze-youtube', protect, aiLimiter, async (req, res) => {
+    try {
+        const { url, title } = req.body;
+
+        if (!url || (!url.includes('youtube.com') && !url.includes('youtu.be'))) {
+            return res.status(400).json({ error: 'Please provide a valid YouTube URL' });
+        }
+
+        // Step 1: Extract video ID (supports youtu.be/ and youtube.com/watch?v= formats)
+        const match = url.match(/(?:youtu\.be\/|youtube\.com\/watch\?v=)([^&]+)/);
+        const videoId = match ? match[1] : null;
+
+        if (!videoId) {
+            return res.status(400).json({ error: 'Could not extract video ID from URL' });
+        }
+
+        const { YoutubeTranscript } = require('youtube-transcript');
+        let analysisText = '';
+        let contentSource = 'transcript';
+
+        // Step 2: Try to fetch transcript
+        try {
+            const transcriptData = await YoutubeTranscript.fetchTranscript(videoId);
+            const joined = transcriptData.map(item => item.text).join(' ');
+            if (joined) {
+                analysisText = joined;
+                console.log('Transcript length:', analysisText.length);
+            }
+        } catch (transcriptError) {
+            console.log('Transcript unavailable, trying oEmbed fallback:', transcriptError.message);
+        }
+
+        // Step 3: Fall back to YouTube oEmbed metadata if transcript is empty
+        if (!analysisText) {
+            try {
+                const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
+                const oembedRes = await fetch(oembedUrl);
+                if (!oembedRes.ok) throw new Error(`oEmbed responded with status ${oembedRes.status}`);
+                const oembedData = await oembedRes.json();
+
+                const videoTitle = oembedData.title || '';
+                const channelName = oembedData.author_name || '';
+
+                // Step 4: Build input text from title + metadata
+                analysisText = `Video Title: ${videoTitle}\nChannel: ${channelName}`;
+                contentSource = 'metadata';
+                console.log('Using oEmbed metadata. Title:', videoTitle);
+            } catch (oembedError) {
+                console.error('oEmbed fallback failed:', oembedError);
+                return res.status(400).json({
+                    error: 'Could not retrieve video information. Please check the URL and try again.'
+                });
+            }
+        }
+
+        const { generateNotesFromYouTube } = require('../services/llmService');
+        const { preprocessText, extractKeywords } = require('../services/nlpService');
+
+        // Step 5: Generate study notes from whichever content source was available
+        const notes = await generateNotesFromYouTube(analysisText);
+
+        const tokens = preprocessText(analysisText);
+        const keywords = extractKeywords(analysisText);
+
+        // Save to database
+        const note = await Note.create({
+            userId: req.user.id,
+            title: title || `YouTube: ${videoId}`,
+            sourceType: 'youtube',
+            originalFileUrl: url,
+            rawContent: analysisText,
+            processedContent: tokens.join(' '),
+            keywords: keywords,
+            summary: notes,
+            content: notes
+        });
+
+        res.status(201).json({
+            success: true,
+            notes: notes,
+            noteId: note._id,
+            videoId: videoId,
+            contentSource: contentSource
+        });
+    } catch (error) {
+        console.error('YouTube Analysis Error:', error);
+        res.status(500).json({ error: 'Failed to analyze YouTube video: ' + error.message });
     }
 });
 

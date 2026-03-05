@@ -35,9 +35,13 @@ router.post('/upload', protect, upload.single('file'), async (req, res) => {
             originalFileUrl = `/uploads/${fileName}`;
 
             if (sourceType === 'image') {
+                console.log(`[Upload] Starting Image OCR...`);
                 rawContent = await performImageOCR(filePath);
+                console.log(`[Upload] Image OCR complete. Characters extracted: ${rawContent.length}`);
             } else if (sourceType === 'pdf') {
+                console.log(`[Upload] Starting PDF text extraction...`);
                 rawContent = await extractPDFText(filePath);
+                console.log(`[Upload] PDF extraction complete. Characters extracted: ${rawContent.length}`);
             }
 
             // Notice: Removed fs.unlinkSync(tempPath) to preserve the file for future quizzes/flashcards
@@ -47,7 +51,7 @@ router.post('/upload', protect, upload.single('file'), async (req, res) => {
             return res.status(400).json({ error: 'Could not extract any content.' });
         }
 
-        function chunkText(text, chunkSize = 1500) {
+        function chunkText(text, chunkSize = 8000) {
             const chunks = [];
             for (let i = 0; i < text.length; i += chunkSize) {
                 chunks.push(text.slice(i, i + chunkSize));
@@ -69,10 +73,12 @@ router.post('/upload', protect, upload.single('file'), async (req, res) => {
 
             for (let i = 0; i < chunks.length; i++) {
                 try {
+                    console.log(`[Upload] Sending chunk ${i + 1}/${chunks.length} to Groq LLM (${chunks[i].length} chars)...`);
                     const chunkResult = await generateSummary(chunks[i], 800);
                     combinedSummary += chunkResult + "\n\n";
+                    console.log(`[Upload] Chunk ${i + 1}/${chunks.length} complete.`);
                 } catch (chunkError) {
-                    console.error(`[Upload] LLM Summary skipped for chunk ${i} due to error:`, chunkError.message);
+                    console.error(`[Upload] LLM Summary skipped for chunk ${i + 1} due to error:`, chunkError.message);
                 }
 
                 // Delay between requests to avoid hitting rate limit

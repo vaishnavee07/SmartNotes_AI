@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Sidebar from '../components/layout/Sidebar';
 import { FileUp, Book, Brain, FileText, Image as ImageIcon, Sparkles, X, ChevronRight, MessageSquare, RefreshCw, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -10,6 +10,7 @@ import useActivityTracker from '../hooks/useActivityTracker';
 const StudyArea = () => {
     useActivityTracker('study');
     const navigate = useNavigate();
+    const summaryRef = useRef(null);
     const [notes, setNotes] = useState([]);
     const [isUploading, setIsUploading] = useState(false);
     const [selectedFile, setSelectedFile] = useState(null);
@@ -18,6 +19,13 @@ const StudyArea = () => {
     const [isAiOrbOpen, setIsAiOrbOpen] = useState(false);
     const [explaining, setExplaining] = useState(false);
     const [explanation, setExplanation] = useState(null);
+    
+    // New states for text and YouTube input
+    const [inputText, setInputText] = useState('');
+    const [youtubeUrl, setYoutubeUrl] = useState('');
+    const [generatedNotes, setGeneratedNotes] = useState(null);
+    const [isGenerating, setIsGenerating] = useState(false);
+    const [activeTab, setActiveTab] = useState('upload'); // 'upload', 'text', 'youtube'
 
     const handleOpenNote = async (note) => {
         setActiveNote(note);
@@ -106,20 +114,112 @@ const StudyArea = () => {
         }
     };
 
+    const handleGenerateFromText = async () => {
+        if (!inputText.trim()) {
+            alert('Please enter some text');
+            return;
+        }
+
+        setIsGenerating(true);
+        setGeneratedNotes(null);
+        try {
+            const res = await api.post('/study/generate-notes', {
+                text: inputText,
+                title: noteTitle || 'Text Input Note'
+            });
+            setGeneratedNotes(res.data.notes);
+            setInputText('');
+            setNoteTitle('');
+            fetchNotes();
+            alert('Notes generated and saved successfully!');
+        } catch (error) {
+            console.error('Generate notes error:', error);
+            alert(error.response?.data?.error || 'Failed to generate notes');
+        } finally {
+            setIsGenerating(false);
+        }
+    };
+
+    const handleAnalyzeYouTube = async () => {
+        if (!youtubeUrl.trim()) {
+            alert('Please enter a YouTube URL');
+            return;
+        }
+
+        if (!youtubeUrl.includes('youtube.com') && !youtubeUrl.includes('youtu.be')) {
+            alert('Please enter a valid YouTube URL');
+            return;
+        }
+
+        setIsGenerating(true);
+        setGeneratedNotes(null);
+        try {
+            const res = await api.post('/study/analyze-youtube', {
+                url: youtubeUrl,
+                title: noteTitle || 'YouTube Video Notes'
+            });
+            setGeneratedNotes(res.data.notes);
+            setYoutubeUrl('');
+            setNoteTitle('');
+            fetchNotes();
+            alert('YouTube video analyzed and notes saved successfully!');
+        } catch (error) {
+            console.error('YouTube analysis error:', error);
+            alert(error.response?.data?.error || 'Failed to analyze YouTube video');
+        } finally {
+            setIsGenerating(false);
+        }
+    };
+
     const handleExportPDF = () => {
         if (!activeNote) return;
-        const element = document.getElementById('pdf-content');
-        if (!element) return;
 
-        const opt = {
-            margin: 0.5,
-            filename: `${activeNote.title || 'SmartNote'}.pdf`,
-            image: { type: 'jpeg', quality: 0.98 },
-            html2canvas: { scale: 2 },
-            jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
+        const element = document.getElementById('notes-content');
+        if (!element) {
+            console.error('Notes container not found');
+            return;
+        }
+
+        // Build a clean, DOM-independent HTML string from the raw note content.
+        // Capturing the live element is unreliable because ancestor elements use
+        // backdrop-blur / semi-transparent backgrounds that html2canvas cannot
+        // render, producing blank pages. Reading from state + inline styles is
+        // always deterministic and fully white-on-black.
+        const raw = activeNote.content || `${activeNote.title}\n\nNo content available.`;
+
+        const htmlLines = raw.split('\n').map(line => {
+            if (line.startsWith('# '))
+                return `<h1 style="font-size:22px;font-weight:bold;margin:16px 0 8px;color:#1e293b;">${line.slice(2)}</h1>`;
+            if (line.startsWith('## '))
+                return `<h2 style="font-size:17px;font-weight:bold;margin:14px 0 6px;color:#334155;">${line.slice(3)}</h2>`;
+            if (line.startsWith('• ') || line.startsWith('- '))
+                return `<p style="margin:3px 0 3px 16px;color:#1e293b;">• ${line.slice(2)}</p>`;
+            if (/^━+$/.test(line.trim()))
+                return `<hr style="border:none;border-top:2px solid #e2e8f0;margin:10px 0;" />`;
+            if (line.trim() === '')
+                return `<br/>`;
+            return `<p style="margin:5px 0;color:#1e293b;">${line}</p>`;
+        }).join('');
+
+        const htmlString = `
+            <div style="font-family:Arial,sans-serif;background:#ffffff;color:#1e293b;padding:20px;max-width:750px;">
+                <h1 style="font-size:24px;font-weight:bold;margin-bottom:20px;color:#1e293b;border-bottom:2px solid #e2e8f0;padding-bottom:10px;">
+                    ${activeNote.title || 'SmartNote'}
+                </h1>
+                ${htmlLines}
+            </div>`;
+
+        const options = {
+            margin:      [12, 12, 12, 12],
+            filename:    `${activeNote.title || 'SmartNote'}.pdf`,
+            image:       { type: 'jpeg', quality: 0.98 },
+            html2canvas: { scale: 2, backgroundColor: '#ffffff', logging: false },
+            jsPDF:       { unit: 'mm', format: 'a4', orientation: 'portrait' },
         };
 
-        html2pdf().set(opt).from(element).save();
+        setTimeout(() => {
+            html2pdf().set(options).from(htmlString).save();
+        }, 500);
     };
 
     const parseContent = (content) => {
@@ -189,68 +289,165 @@ const StudyArea = () => {
                             </header>
 
                             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                                {/* Upload Section */}
+                                {/* Input Section with Tabs */}
                                 <div className="lg:col-span-1">
                                     <div className="glass-panel p-6 animate-slide-up sticky top-8">
                                         <div className="absolute -top-4 -right-4 w-24 h-24 bg-gradient-to-br from-primary/20 to-secondary/20 rounded-full blur-xl z-0"></div>
                                         <h2 className="text-2xl font-display font-bold mb-6 flex items-center gap-2 relative z-10">
-                                            <div className="p-2 bg-primary/10 text-primary rounded-xl"><FileUp size={20} /></div>
-                                            Upload
+                                            <div className="p-2 bg-primary/10 text-primary rounded-xl"><Sparkles size={20} /></div>
+                                            Create Notes
                                         </h2>
 
-                                        <form onSubmit={handleUpload} className="space-y-5 relative z-10">
-                                            <div>
-                                                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">Note Title</label>
-                                                <input
-                                                    type="text"
-                                                    className="input-field shadow-sm bg-white/70"
-                                                    placeholder="e.g. Chapter 4: System Design Architecture"
-                                                    value={noteTitle}
-                                                    onChange={(e) => setNoteTitle(e.target.value)}
-                                                    required
-                                                />
-                                            </div>
-
-                                            <div
-                                                className={`border-2 border-dashed rounded-3xl p-8 text-center transition-all duration-300 group cursor-pointer ${selectedFile ? 'border-primary bg-primary/5 shadow-inner' : 'border-slate-300 hover:border-primary/50 bg-white/40 hover:bg-white/60'}`}
-                                            >
-                                                <input
-                                                    type="file"
-                                                    className="hidden"
-                                                    id="file-upload"
-                                                    accept=".pdf,image/*,.txt"
-                                                    onChange={(e) => setSelectedFile(e.target.files[0])}
-                                                />
-                                                <label htmlFor="file-upload" className="cursor-pointer flex flex-col items-center w-full h-full relative">
-                                                    {selectedFile ? (
-                                                        <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="w-16 h-16 bg-gradient-to-br from-primary to-secondary rounded-2xl flex items-center justify-center text-white mb-3 shadow-lg shadow-primary/20">
-                                                            <Book className="w-8 h-8" />
-                                                        </motion.div>
-                                                    ) : (
-                                                        <div className="w-16 h-16 bg-slate-100 group-hover:bg-primary/10 rounded-2xl flex items-center justify-center text-slate-400 group-hover:text-primary transition-colors mb-3">
-                                                            <FileUp className="w-8 h-8 group-hover:-translate-y-1 transition-transform" />
-                                                        </div>
-                                                    )}
-                                                    <span className="text-sm font-bold text-slate-700">
-                                                        {selectedFile ? selectedFile.name : 'Click to browse notes'}
-                                                    </span>
-                                                    <span className="text-xs font-semibold text-slate-400 mt-2 bg-slate-100 px-3 py-1 rounded-md">PDF, Image, Text</span>
-                                                </label>
-                                            </div>
-
+                                        {/* Tab Buttons */}
+                                        <div className="flex gap-2 mb-6 relative z-10">
                                             <button
-                                                type="submit"
-                                                disabled={!selectedFile || !noteTitle || isUploading}
-                                                className="w-full btn-primary disabled:opacity-50 disabled:cursor-not-allowed group relative overflow-hidden"
+                                                onClick={() => setActiveTab('upload')}
+                                                className={`flex-1 py-2 px-3 rounded-xl text-sm font-bold transition-all ${activeTab === 'upload' ? 'bg-primary text-white shadow-lg' : 'bg-white/50 text-slate-600 hover:bg-white/80'}`}
                                             >
-                                                {isUploading && <div className="absolute inset-0 bg-white/20 animate-pulse"></div>}
-                                                {isUploading ? (
-                                                    <span className="flex items-center gap-2"><RefreshCw className="animate-spin" size={18} /> Processing...</span>
-                                                ) : (
-                                                    <span className="flex items-center gap-2 relative z-10"><Sparkles size={18} /> Process with AI</span>
-                                                )}
+                                                <FileUp className="inline w-4 h-4 mr-1" /> Upload
                                             </button>
-                                        </form>
+                                            <button
+                                                onClick={() => setActiveTab('text')}
+                                                className={`flex-1 py-2 px-3 rounded-xl text-sm font-bold transition-all ${activeTab === 'text' ? 'bg-primary text-white shadow-lg' : 'bg-white/50 text-slate-600 hover:bg-white/80'}`}
+                                            >
+                                                <FileText className="inline w-4 h-4 mr-1" /> Text
+                                            </button>
+                                            <button
+                                                onClick={() => setActiveTab('youtube')}
+                                                className={`flex-1 py-2 px-3 rounded-xl text-sm font-bold transition-all ${activeTab === 'youtube' ? 'bg-primary text-white shadow-lg' : 'bg-white/50 text-slate-600 hover:bg-white/80'}`}
+                                            >
+                                                <ImageIcon className="inline w-4 h-4 mr-1" /> YouTube
+                                            </button>
+                                        </div>
+
+                                        {/* Common Title Input */}
+                                        <div className="mb-5 relative z-10">
+                                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">Note Title</label>
+                                            <input
+                                                type="text"
+                                                className="input-field shadow-sm bg-white/70"
+                                                placeholder="e.g. Chapter 4: Neural Networks"
+                                                value={noteTitle}
+                                                onChange={(e) => setNoteTitle(e.target.value)}
+                                            />
+                                        </div>
+
+                                        {/* Upload Tab Content */}
+                                        {activeTab === 'upload' && (
+                                            <form onSubmit={handleUpload} className="space-y-5 relative z-10">
+                                                <div
+                                                    className={`border-2 border-dashed rounded-3xl p-8 text-center transition-all duration-300 group cursor-pointer ${selectedFile ? 'border-primary bg-primary/5 shadow-inner' : 'border-slate-300 hover:border-primary/50 bg-white/40 hover:bg-white/60'}`}
+                                                >
+                                                    <input
+                                                        type="file"
+                                                        className="hidden"
+                                                        id="file-upload"
+                                                        accept=".pdf,image/*,.txt"
+                                                        onChange={(e) => setSelectedFile(e.target.files[0])}
+                                                    />
+                                                    <label htmlFor="file-upload" className="cursor-pointer flex flex-col items-center w-full h-full relative">
+                                                        {selectedFile ? (
+                                                            <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="w-16 h-16 bg-gradient-to-br from-primary to-secondary rounded-2xl flex items-center justify-center text-white mb-3 shadow-lg shadow-primary/20">
+                                                                <Book className="w-8 h-8" />
+                                                            </motion.div>
+                                                        ) : (
+                                                            <div className="w-16 h-16 bg-slate-100 group-hover:bg-primary/10 rounded-2xl flex items-center justify-center text-slate-400 group-hover:text-primary transition-colors mb-3">
+                                                                <FileUp className="w-8 h-8 group-hover:-translate-y-1 transition-transform" />
+                                                            </div>
+                                                        )}
+                                                        <span className="text-sm font-bold text-slate-700">
+                                                            {selectedFile ? selectedFile.name : 'Click to browse files'}
+                                                        </span>
+                                                        <span className="text-xs font-semibold text-slate-400 mt-2 bg-slate-100 px-3 py-1 rounded-md">PDF, Image, Text</span>
+                                                    </label>
+                                                </div>
+
+                                                <button
+                                                    type="submit"
+                                                    disabled={!selectedFile || isUploading}
+                                                    className="w-full btn-primary disabled:opacity-50 disabled:cursor-not-allowed group relative overflow-hidden"
+                                                >
+                                                    {isUploading && <div className="absolute inset-0 bg-white/20 animate-pulse"></div>}
+                                                    {isUploading ? (
+                                                        <span className="flex items-center gap-2"><RefreshCw className="animate-spin" size={18} /> Processing...</span>
+                                                    ) : (
+                                                        <span className="flex items-center gap-2 relative z-10"><Sparkles size={18} /> Process with AI</span>
+                                                    )}
+                                                </button>
+                                            </form>
+                                        )}
+
+                                        {/* Text Tab Content */}
+                                        {activeTab === 'text' && (
+                                            <div className="space-y-5 relative z-10">
+                                                <div>
+                                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">Paste Your Study Material</label>
+                                                    <textarea
+                                                        className="input-field shadow-sm bg-white/70 min-h-[200px] resize-y"
+                                                        placeholder="Paste your notes, textbook content, or any study material here..."
+                                                        value={inputText}
+                                                        onChange={(e) => setInputText(e.target.value)}
+                                                    />
+                                                </div>
+
+                                                <button
+                                                    onClick={handleGenerateFromText}
+                                                    disabled={!inputText.trim() || isGenerating}
+                                                    className="w-full btn-primary disabled:opacity-50 disabled:cursor-not-allowed group relative overflow-hidden"
+                                                >
+                                                    {isGenerating && <div className="absolute inset-0 bg-white/20 animate-pulse"></div>}
+                                                    {isGenerating ? (
+                                                        <span className="flex items-center gap-2"><RefreshCw className="animate-spin" size={18} /> Generating...</span>
+                                                    ) : (
+                                                        <span className="flex items-center gap-2 relative z-10"><Brain size={18} /> Generate Notes</span>
+                                                    )}
+                                                </button>
+                                            </div>
+                                        )}
+
+                                        {/* YouTube Tab Content */}
+                                        {activeTab === 'youtube' && (
+                                            <div className="space-y-5 relative z-10">
+                                                <div>
+                                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">YouTube Video URL</label>
+                                                    <input
+                                                        type="url"
+                                                        className="input-field shadow-sm bg-white/70"
+                                                        placeholder="https://www.youtube.com/watch?v=..."
+                                                        value={youtubeUrl}
+                                                        onChange={(e) => setYoutubeUrl(e.target.value)}
+                                                    />
+                                                    <p className="text-xs text-slate-400 mt-2">
+                                                        AI will fetch the video transcript and generate study notes
+                                                    </p>
+                                                </div>
+
+                                                <button
+                                                    onClick={handleAnalyzeYouTube}
+                                                    disabled={!youtubeUrl.trim() || isGenerating}
+                                                    className="w-full btn-primary disabled:opacity-50 disabled:cursor-not-allowed group relative overflow-hidden"
+                                                >
+                                                    {isGenerating && <div className="absolute inset-0 bg-white/20 animate-pulse"></div>}
+                                                    {isGenerating ? (
+                                                        <span className="flex items-center gap-2"><RefreshCw className="animate-spin" size={18} /> Analyzing...</span>
+                                                    ) : (
+                                                        <span className="flex items-center gap-2 relative z-10"><Sparkles size={18} /> Analyze Video</span>
+                                                    )}
+                                                </button>
+                                            </div>
+                                        )}
+
+                                        {/* Generated Notes Preview */}
+                                        {generatedNotes && (
+                                            <motion.div
+                                                initial={{ opacity: 0, y: 10 }}
+                                                animate={{ opacity: 1, y: 0 }}
+                                                className="mt-6 p-4 bg-green-50 border border-green-200 rounded-2xl relative z-10"
+                                            >
+                                                <p className="text-sm font-bold text-green-800 mb-2">✅ Notes Generated Successfully!</p>
+                                                <p className="text-xs text-green-600">Check your notes list below.</p>
+                                            </motion.div>
+                                        )}
                                     </div>
                                 </div>
 
@@ -336,7 +533,7 @@ const StudyArea = () => {
                             {/* Editor Content Layout */}
                             <div className="flex flex-1 relative">
                                 {/* Main Content Scroll Area */}
-                                <div id="pdf-content" className="flex-1 p-12 overflow-y-auto max-h-[calc(85vh-5rem)] scroll-smooth relative z-10">
+                                <div id="notes-content" ref={summaryRef} className="flex-1 p-12 overflow-y-auto max-h-[calc(85vh-5rem)] scroll-smooth relative z-10">
                                     <div className="max-w-3xl mx-auto pb-32">
                                         <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/10 text-primary font-bold text-xs uppercase tracking-widest mb-4">
                                             <Sparkles size={12} /> AI Generated Summary

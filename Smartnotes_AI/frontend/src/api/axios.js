@@ -2,6 +2,7 @@ import axios from 'axios';
 
 const api = axios.create({
     baseURL: 'http://localhost:5000/api',
+    timeout: 600000, // 10 minutes — large PDFs take time to process through Groq LLM
 });
 
 // ─── Request Interceptor ───────────────────────────────────

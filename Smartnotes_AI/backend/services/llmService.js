@@ -32,12 +32,83 @@ const callGroq = async (systemPrompt, userPrompt, maxTokens = null) => {
 };
 
 /**
- * Generate structural abstractive summary
+ * Generate Smart AI Study Notes (University Exam Format)
  */
-const generateSummary = async (text, maxTokens = 800) => {
-    const safeText = text.slice(0, 2500);
-    const systemPrompt = "You are an AI study assistant. Summarize the following educational text into key bullet points clearly and concisely.";
-    return await callGroq(systemPrompt, safeText, maxTokens);
+const generateSummary = async (text, maxTokens = 2000) => {
+    const contentText = text.slice(0, 10000);
+    const summaryPrompt = `
+You are an expert university teacher creating detailed study notes for students.
+
+Generate UNIVERSITY-STYLE STUDY NOTES in the following format (600-800 words):
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📚 TOPIC OVERVIEW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3–4 lines explaining the main topic simply and clearly.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 IMPORTANT TOPICS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Topic 1
+• Topic 2
+• Topic 3
+• Topic 4
+• Topic 5
+• Topic 6 (add up to 8 if applicable)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📖 KEY DEFINITIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Term 1 – simple one-line definition
+• Term 2 – simple one-line definition
+• Term 3 – simple one-line definition
+• Term 4 – simple one-line definition
+• Term 5 – simple one-line definition
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📐 IMPORTANT FORMULAS (if applicable)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Formula 1
+• Formula 2
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💡 CONCEPT EXPLANATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Key concept 1 explained in 2-3 lines
+• Key concept 2 explained in 2-3 lines
+• Key concept 3 explained in 2-3 lines
+• Key concept 4 explained in 2-3 lines
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📝 EXAMPLES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Example 1 briefly explained
+• Example 2 briefly explained
+• Example 3 briefly explained
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⭐ KEY POINTS FOR EXAMS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Important concept 1 to remember
+• Important concept 2 to remember
+• Important concept 3 to remember
+• Important concept 4 to remember
+• Important concept 5 to remember
+• Important concept 6 to remember (add up to 8 if applicable)
+
+CRITICAL RULES:
+- Aim for 600-800 words total
+- Use bullet points, avoid long paragraphs
+- Focus only on important concepts
+- Make it student-friendly and exam-focused
+- Use simple language a student can understand quickly
+- Skip the formulas section if the topic has none
+- Always include the examples section with 2-3 short examples
+
+Source Content:
+${contentText}
+`;
+    return await callGroq("You are an expert university teacher.", summaryPrompt, maxTokens);
 };
 
 /**
@@ -232,6 +303,172 @@ const studyChatResponse = async (context, query) => {
     return await callGroq(systemPrompt, query);
 };
 
+/**
+ * Generate University-Style Flashcards (2/5/10 marks format)
+ */
+const generateUniversityFlashcards = async (text) => {
+    const safeText = text.slice(0, 4000);
+    const systemPrompt = `Generate exam-oriented revision flashcards in UNIVERSITY EXAM FORMAT.
+
+CRITICAL FORMAT RULES:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2 MARK QUESTIONS (Generate 4 questions):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Answer format: Maximum 2–3 lines, direct definition or concept explanation. No long paragraphs.
+
+Example Answer Structure:
+"[Term/Concept] is [definition]. It is characterized by [key point]."
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5 MARK QUESTIONS (Generate 3 questions):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Answer format:
+1. Definition/Introduction (2-3 lines)
+2. Key Points:
+   • Point 1 – short explanation
+   • Point 2 – short explanation
+   • Point 3 – short explanation
+3. Short conclusion sentence
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10 MARK QUESTIONS (Generate 2 questions):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Answer format:
+1. Introduction (3-4 lines)
+2. Main Explanation with Headings:
+   • Concept Explanation
+   • Components/Techniques
+   • Advantages
+   • Applications/Examples
+3. Conclusion (2 lines)
+
+STRICT JSON OUTPUT:
+
+{
+  "twoMark": [
+    { "question": "Define X", "answer": "X is... [2-3 lines max]" }
+  ],
+  "fiveMark": [
+    { "question": "Explain Y", "answer": "Introduction...\\n\\nKey Points:\\n• Point 1\\n• Point 2\\n• Point 3\\n\\nConclusion..." }
+  ],
+  "tenMark": [
+    { "question": "Discuss Z in detail", "answer": "Introduction...\\n\\nConcept Explanation\\n...\\n\\nAdvantages\\n...\\n\\nConclusion..." }
+  ]
+}
+
+IMPORTANT:
+- Answers MUST follow university exam writing style
+- Use headings and bullet points
+- Avoid continuous paragraphs
+- Keep answers structured and exam-friendly
+- Return ONLY valid JSON, no markdown, no extra text`;
+
+    const response = await callGroq(systemPrompt, `Text:\n${safeText}`, 2000);
+    try {
+        const raw = response.trim();
+        const jsonStart = raw.indexOf("{");
+        const jsonEnd = raw.lastIndexOf("}");
+
+        if (jsonStart === -1 || jsonEnd === -1) {
+            throw new Error("Invalid JSON returned from LLM");
+        }
+
+        const jsonString = raw.slice(jsonStart, jsonEnd + 1);
+        return JSON.parse(jsonString);
+    } catch (e) {
+        console.error("JSON Parse Error in generateUniversityFlashcards:", e.message);
+        throw new Error("Failed to parse flashcards JSON");
+    }
+};
+
+/**
+ * Generate notes from text input
+ */
+const generateNotesFromText = async (text) => {
+    return await generateSummary(text, 1200);
+};
+
+/**
+ * Generate notes from YouTube transcript
+ */
+const generateNotesFromYouTube = async (transcript) => {
+    const safeTranscript = transcript.slice(0, 10000);
+    const prompt = `
+You are an expert university teacher creating detailed study notes from a YouTube video transcript.
+
+Generate UNIVERSITY-STYLE STUDY NOTES in the following format (600-800 words):
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📚 TOPIC OVERVIEW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3–4 lines explaining the main topic covered in the video.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 IMPORTANT TOPICS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Topic 1
+• Topic 2
+• Topic 3
+• Topic 4
+• Topic 5
+• Topic 6 (add up to 8 if applicable)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📖 KEY DEFINITIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Term 1 – simple one-line definition
+• Term 2 – simple one-line definition
+• Term 3 – simple one-line definition
+• Term 4 – simple one-line definition
+• Term 5 – simple one-line definition
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📐 IMPORTANT FORMULAS (if applicable)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Formula 1
+• Formula 2
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💡 CONCEPT EXPLANATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Key concept 1 explained in 2-3 lines
+• Key concept 2 explained in 2-3 lines
+• Key concept 3 explained in 2-3 lines
+• Key concept 4 explained in 2-3 lines
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📝 EXAMPLES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Example 1 briefly explained
+• Example 2 briefly explained
+• Example 3 briefly explained
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⭐ KEY POINTS FOR EXAMS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Important concept 1 to remember
+• Important concept 2 to remember
+• Important concept 3 to remember
+• Important concept 4 to remember
+• Important concept 5 to remember
+• Important concept 6 to remember (add up to 8 if applicable)
+
+CRITICAL RULES:
+- Aim for 600-800 words total
+- Use bullet points, avoid long paragraphs
+- Focus only on important concepts
+- Make it student-friendly and exam-focused
+- Use simple language a student can understand quickly
+- Skip the formulas section if the topic has none
+- Always include the examples section with 2-3 short examples
+
+Video Transcript:
+${safeTranscript}
+`;
+    return await callGroq("You are an expert university teacher.", prompt, 2000);
+};
+
 module.exports = {
     generateSummary,
     generateFlashcards,
@@ -240,4 +477,7 @@ module.exports = {
     generateRevisionRoadmap,
     studyChatResponse,
     generateQuestionPaper,
+    generateUniversityFlashcards,
+    generateNotesFromText,
+    generateNotesFromYouTube,
 };
