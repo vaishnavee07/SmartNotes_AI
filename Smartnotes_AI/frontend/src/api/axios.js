@@ -1,7 +1,12 @@
 import axios from 'axios';
 
+const BASE_URL =
+    import.meta.env.MODE === 'development'
+        ? 'http://localhost:5000/api'
+        : 'https://smartnotes-backend-5asd.onrender.com/api';
+
 const api = axios.create({
-    baseURL: "https://smartnotes-backend-5asd.onrender.com",
+    baseURL: BASE_URL,
     timeout: 600000, // 10 minutes — large PDFs take time to process through Groq LLM
 });
 

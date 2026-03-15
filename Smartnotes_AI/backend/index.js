@@ -13,14 +13,35 @@ connectDB();
 
 const app = express();
 
-// Middleware
-app.use(express.json());
-app.use(cors({
-    origin: ['http://localhost:5173', 'http://127.0.0.1:5173', ' https://smart-notes-ai-three-azure.vercel.app'],
+// CORS must be first — before helmet and any route handlers
+const ALLOWED_ORIGINS = [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'https://smart-notes-ai-three-azure.vercel.app',
+];
+
+const corsOptions = {
+    origin: (origin, callback) => {
+        // Allow requests with no origin (e.g. curl, Postman, server-to-server)
+        if (!origin) return callback(null, true);
+        if (ALLOWED_ORIGINS.includes(origin)) {
+            callback(null, true);
+        } else {
+            console.warn(`[CORS] Blocked request from: ${origin}`);
+            callback(new Error(`CORS policy: origin '${origin}' is not allowed`));
+        }
+    },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
-}));
+};
+
+// Handle preflight OPTIONS requests for all routes
+app.options(/.*/, cors(corsOptions));
+
+// Middleware
+app.use(cors(corsOptions));
+app.use(express.json());
 app.use(helmet());
 app.use(morgan('dev'));
 
