@@ -13,19 +13,29 @@ const StudyArea = () => {
     const summaryRef = useRef(null);
     const [notes, setNotes] = useState([]);
     const [isUploading, setIsUploading] = useState(false);
+    const [uploadStep, setUploadStep] = useState(0); // 0=idle,1=extracting,2=analysing,3=generating,4=done
+    const [uploadError, setUploadError] = useState(null);
     const [selectedFile, setSelectedFile] = useState(null);
     const [noteTitle, setNoteTitle] = useState('');
     const [activeNote, setActiveNote] = useState(null);
     const [isAiOrbOpen, setIsAiOrbOpen] = useState(false);
     const [explaining, setExplaining] = useState(false);
     const [explanation, setExplanation] = useState(null);
-    
+    const [inlineError, setInlineError] = useState(null);
+
     // New states for text and YouTube input
     const [inputText, setInputText] = useState('');
     const [youtubeUrl, setYoutubeUrl] = useState('');
     const [generatedNotes, setGeneratedNotes] = useState(null);
     const [isGenerating, setIsGenerating] = useState(false);
     const [activeTab, setActiveTab] = useState('upload'); // 'upload', 'text', 'youtube'
+
+    const UPLOAD_STEPS = [
+        { icon: '📄', label: 'Extracting text...' },
+        { icon: '🔍', label: 'Analysing chunks...' },
+        { icon: '✨', label: 'Generating revision notes...' },
+        { icon: '✅', label: 'Notes ready!' },
+    ];
 
     const handleOpenNote = async (note) => {
         setActiveNote(note);
@@ -76,6 +86,10 @@ const StudyArea = () => {
         if (!selectedFile || !noteTitle) return;
 
         setIsUploading(true);
+        setUploadError(null);
+        setInlineError(null);
+        setUploadStep(1); // Extracting text
+
         const formData = new FormData();
         formData.append('title', noteTitle);
 
@@ -84,16 +98,27 @@ const StudyArea = () => {
         formData.append('sourceType', sourceType);
         formData.append('file', selectedFile);
 
+        // Simulate step progression while the server processes
+        const stepTimer1 = setTimeout(() => setUploadStep(2), 4000);  // Analysing chunks
+        const stepTimer2 = setTimeout(() => setUploadStep(3), 10000); // Generating notes
+
         try {
             await api.post('/notes/upload', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
             });
+            clearTimeout(stepTimer1);
+            clearTimeout(stepTimer2);
+            setUploadStep(4); // Done
             setSelectedFile(null);
             setNoteTitle('');
             fetchNotes();
+            setTimeout(() => setUploadStep(0), 2500);
         } catch (err) {
+            clearTimeout(stepTimer1);
+            clearTimeout(stepTimer2);
             console.error(err);
-            alert(err.response?.data?.error || 'Failed to upload/parse note. Ensure PDF is valid.');
+            setUploadError(err.response?.data?.error || 'Failed to upload/parse note. Ensure the PDF is valid.');
+            setUploadStep(0);
         } finally {
             setIsUploading(false);
         }
@@ -116,12 +141,13 @@ const StudyArea = () => {
 
     const handleGenerateFromText = async () => {
         if (!inputText.trim()) {
-            alert('Please enter some text');
+            setInlineError('Please enter some text before generating notes.');
             return;
         }
 
         setIsGenerating(true);
         setGeneratedNotes(null);
+        setInlineError(null);
         try {
             const res = await api.post('/study/generate-notes', {
                 text: inputText,
@@ -131,10 +157,9 @@ const StudyArea = () => {
             setInputText('');
             setNoteTitle('');
             fetchNotes();
-            alert('Notes generated and saved successfully!');
         } catch (error) {
             console.error('Generate notes error:', error);
-            alert(error.response?.data?.error || 'Failed to generate notes');
+            setInlineError(error.response?.data?.error || 'Failed to generate notes. Please try again.');
         } finally {
             setIsGenerating(false);
         }
@@ -142,17 +167,18 @@ const StudyArea = () => {
 
     const handleAnalyzeYouTube = async () => {
         if (!youtubeUrl.trim()) {
-            alert('Please enter a YouTube URL');
+            setInlineError('Please enter a YouTube URL.');
             return;
         }
 
         if (!youtubeUrl.includes('youtube.com') && !youtubeUrl.includes('youtu.be')) {
-            alert('Please enter a valid YouTube URL');
+            setInlineError('Please enter a valid YouTube URL (youtube.com or youtu.be).');
             return;
         }
 
         setIsGenerating(true);
         setGeneratedNotes(null);
+        setInlineError(null);
         try {
             const res = await api.post('/study/analyze-youtube', {
                 url: youtubeUrl,
@@ -162,10 +188,9 @@ const StudyArea = () => {
             setYoutubeUrl('');
             setNoteTitle('');
             fetchNotes();
-            alert('YouTube video analyzed and notes saved successfully!');
         } catch (error) {
             console.error('YouTube analysis error:', error);
-            alert(error.response?.data?.error || 'Failed to analyze YouTube video');
+            setInlineError(error.response?.data?.error || 'Failed to analyze YouTube video. Please try again.');
         } finally {
             setIsGenerating(false);
         }
@@ -362,6 +387,49 @@ const StudyArea = () => {
                                                     </label>
                                                 </div>
 
+                                                {/* Upload progress stepper */}
+                                                {isUploading && uploadStep > 0 && (
+                                                    <motion.div
+                                                        initial={{ opacity: 0, y: 6 }}
+                                                        animate={{ opacity: 1, y: 0 }}
+                                                        className="mb-4 p-3 bg-primary/5 border border-primary/20 rounded-2xl"
+                                                    >
+                                                        <div className="flex flex-col gap-1.5">
+                                                            {UPLOAD_STEPS.map((step, idx) => {
+                                                                const stepNum = idx + 1;
+                                                                const isDone = uploadStep > stepNum;
+                                                                const isActive = uploadStep === stepNum;
+                                                                return (
+                                                                    <div key={idx} className={`flex items-center gap-2 text-xs font-semibold transition-all duration-300 ${
+                                                                        isDone ? 'text-green-600 opacity-70' :
+                                                                        isActive ? 'text-primary' :
+                                                                        'text-slate-300'
+                                                                    }`}>
+                                                                        <span className="text-base">{isDone ? '✅' : isActive ? step.icon : '⬜'}</span>
+                                                                        <span>{step.label}</span>
+                                                                        {isActive && <RefreshCw size={10} className="animate-spin ml-auto" />}
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </motion.div>
+                                                )}
+
+                                                {/* Upload error */}
+                                                <AnimatePresence>
+                                                    {uploadError && (
+                                                        <motion.div
+                                                            initial={{ opacity: 0, y: -6 }}
+                                                            animate={{ opacity: 1, y: 0 }}
+                                                            exit={{ opacity: 0 }}
+                                                            className="mb-3 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 font-semibold flex items-start gap-2"
+                                                        >
+                                                            <span>⚠️</span>
+                                                            <span>{uploadError}</span>
+                                                        </motion.div>
+                                                    )}
+                                                </AnimatePresence>
+
                                                 <button
                                                     type="submit"
                                                     disabled={!selectedFile || isUploading}
@@ -369,7 +437,10 @@ const StudyArea = () => {
                                                 >
                                                     {isUploading && <div className="absolute inset-0 bg-white/20 animate-pulse"></div>}
                                                     {isUploading ? (
-                                                        <span className="flex items-center gap-2"><RefreshCw className="animate-spin" size={18} /> Processing...</span>
+                                                        <span className="flex items-center gap-2">
+                                                            <RefreshCw className="animate-spin" size={18} />
+                                                            {uploadStep > 0 && uploadStep <= 4 ? UPLOAD_STEPS[uploadStep - 1].label : 'Processing...'}
+                                                        </span>
                                                     ) : (
                                                         <span className="flex items-center gap-2 relative z-10"><Sparkles size={18} /> Process with AI</span>
                                                     )}
@@ -437,15 +508,31 @@ const StudyArea = () => {
                                             </div>
                                         )}
 
-                                        {/* Generated Notes Preview */}
+                                        {/* Inline error for text/youtube tabs */}
+                                        <AnimatePresence>
+                                            {inlineError && (
+                                                <motion.div
+                                                    initial={{ opacity: 0, y: -6 }}
+                                                    animate={{ opacity: 1, y: 0 }}
+                                                    exit={{ opacity: 0 }}
+                                                    className="mt-4 p-3 bg-red-50 border border-red-200 rounded-2xl text-xs text-red-700 font-semibold flex items-start gap-2 relative z-10"
+                                                >
+                                                    <span>⚠️</span>
+                                                    <span>{inlineError}</span>
+                                                    <button onClick={() => setInlineError(null)} className="ml-auto text-red-400 hover:text-red-600"><X size={12} /></button>
+                                                </motion.div>
+                                            )}
+                                        </AnimatePresence>
+
+                                        {/* Generated Notes Success Banner */}
                                         {generatedNotes && (
                                             <motion.div
                                                 initial={{ opacity: 0, y: 10 }}
                                                 animate={{ opacity: 1, y: 0 }}
-                                                className="mt-6 p-4 bg-green-50 border border-green-200 rounded-2xl relative z-10"
+                                                className="mt-4 p-4 bg-green-50 border border-green-200 rounded-2xl relative z-10"
                                             >
-                                                <p className="text-sm font-bold text-green-800 mb-2">✅ Notes Generated Successfully!</p>
-                                                <p className="text-xs text-green-600">Check your notes list below.</p>
+                                                <p className="text-sm font-bold text-green-800 mb-1">✅ Notes Generated!</p>
+                                                <p className="text-xs text-green-600">Check your notes list →</p>
                                             </motion.div>
                                         )}
                                     </div>

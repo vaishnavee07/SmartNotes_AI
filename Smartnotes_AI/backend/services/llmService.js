@@ -9,10 +9,11 @@ const groq = new Groq({
 
 const MODEL = 'llama-3.1-8b-instant';
 
-/**
- * Helper to call Groq API
- */
-const callGroq = async (systemPrompt, userPrompt, maxTokens = null) => {
+// ─────────────────────────────────────────────────────────────
+// CORE GROQ CALLER
+// temperature: 0.7 for freeform text, 0.3 for JSON outputs
+// ─────────────────────────────────────────────────────────────
+const callGroq = async (systemPrompt, userPrompt, maxTokens = 500, temperature = 0.7) => {
     try {
         const payload = {
             messages: [
@@ -20,199 +21,345 @@ const callGroq = async (systemPrompt, userPrompt, maxTokens = null) => {
                 { role: 'user', content: userPrompt }
             ],
             model: MODEL,
-            temperature: 0.7,
-            max_tokens: maxTokens || 500,
+            temperature,
+            max_tokens: maxTokens,
         };
         const chatCompletion = await groq.chat.completions.create(payload);
         return chatCompletion.choices[0].message.content;
     } catch (error) {
         console.error('Groq API Error:', error.response?.data || error.message);
-        throw new Error('LLM Error generation failed');
+        throw new Error('LLM generation failed: ' + (error.message || 'Unknown error'));
     }
 };
 
-/**
- * Generate Smart AI Study Notes (University Exam Format)
- */
-const generateSummary = async (text, maxTokens = 2000) => {
-    const contentText = text.slice(0, 10000);
-    const summaryPrompt = `
-You are an expert university teacher creating detailed study notes for students.
+// ─────────────────────────────────────────────────────────────
+// SAFE JSON PARSER
+// Strips markdown wrappers, removes bad control characters,
+// extracts first valid JSON array or object, then parses.
+// type: 'array' | 'object' — which bracket type to extract
+// ─────────────────────────────────────────────────────────────
+const safeParseJSON = (raw, type = 'array') => {
+    if (!raw) {
+        throw new Error(`Empty LLM response, cannot parse ${type}`);
+    }
 
-Generate UNIVERSITY-STYLE STUDY NOTES in the following format (600-800 words):
+    // 1. Strip markdown code fences (```json ... ``` or ``` ... ```)
+    let cleaned = raw
+        .replace(/^```+(?:json)?\s*/im, '')
+        .replace(/\s*```+$/im, '')
+        .trim();
+
+    // 2. Remove invalid control characters (0x00–0x1F except \t \n \r)
+    // The "Bad control character in string literal" error is usually caused by 
+    // real newlines or other hidden chars inside a string.
+    // eslint-disable-next-line no-control-regex
+    cleaned = cleaned.replace(/[\x00-\x09\x0B\x0C\x0E-\x1F]/g, '');
+
+    // 3. Normalise Windows line endings and sanitize remaining problematic newlines
+    cleaned = cleaned.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    
+    // Attempt to handle cases where the model puts unescaped newlines in the middle of a string
+    // This is a partial fix: it looks for newlines that are not preceded by a comma/bracket/digit/quote
+    // However, it's safer to just let the regex below find the JSON block first.
+
+    // 4. Extract first matching JSON block based on depth counting to handle nested structures
+    const openChar  = type === 'array' ? '[' : '{';
+    const closeChar = type === 'array' ? ']' : '}';
+    
+    const start = cleaned.indexOf(openChar);
+    if (start === -1) {
+        throw new Error(`No valid JSON ${type} start (${openChar}) found in LLM response`);
+    }
+
+    // Find the matching closing bracket by tracking depth
+    let depth = 0;
+    let end = -1;
+    for (let i = start; i < cleaned.length; i++) {
+        if (cleaned[i] === openChar) depth++;
+        else if (cleaned[i] === closeChar) {
+            depth--;
+            if (depth === 0) {
+                end = i;
+                break;
+            }
+        }
+    }
+
+    if (end === -1) {
+        // Fallback to last index if depth matching fails
+        end = cleaned.lastIndexOf(closeChar);
+    }
+
+    if (end === -1 || end <= start) {
+        throw new Error(`No valid JSON ${type} found in LLM response`);
+    }
+
+    let jsonString = cleaned.slice(start, end + 1);
+
+    // 5. Final sanitation — walk character by character and escape any literal
+    // newlines / tabs / carriage-returns found inside JSON string values.
+    // The regex approach is unreliable because it can't handle nested quotes correctly.
+    let sanitized = '';
+    let inString = false;
+    let i2 = 0;
+    while (i2 < jsonString.length) {
+        const ch = jsonString[i2];
+        if (ch === '"' && (i2 === 0 || jsonString[i2 - 1] !== '\\')) {
+            inString = !inString;
+            sanitized += ch;
+        } else if (inString) {
+            // Inside a string — escape problematic raw characters
+            if      (ch === '\n') sanitized += '\\n';
+            else if (ch === '\r') sanitized += '\\r';
+            else if (ch === '\t') sanitized += '\\t';
+            else                  sanitized += ch;
+        } else {
+            sanitized += ch;
+        }
+        i2++;
+    }
+    jsonString = sanitized;
+
+    try {
+        return JSON.parse(jsonString);
+    } catch (e) {
+        console.error("Failed to parse cleaned JSON string:", jsonString);
+        throw new Error(`JSON parse failed: ${e.message}`);
+    }
+};
+
+// ─────────────────────────────────────────────────────────────
+// 1. CONCISE CHUNK SUMMARY
+// Generates exam-focused bullet notes from one text chunk.
+// Target: ≤ 300 words per chunk, bullet points only.
+// ─────────────────────────────────────────────────────────────
+const generateSummary = async (text, maxTokens = 800) => {
+    const contentText = text.slice(0, 4000);
+
+    const systemPrompt = `You are a university exam revision assistant. Your job is to extract only the most important information for last-minute exam preparation.`;
+
+    const userPrompt = `Extract ALL key points from the content below for university exam revision.
+
+RULES:
+- Cover EVERY topic and concept mentioned — do not skip anything.
+- Use ONLY bullet points. No long paragraphs.
+- One bullet per concept/definition/formula.
+- Keep each bullet to one clear line.
+- Format:
+
+📌 KEY CONCEPTS
+• [concept] – [one-line definition]
+• [concept] – [one-line definition]
+
+📐 FORMULAS / DEFINITIONS (if any)
+• [formula or term] = [value/meaning]
+
+⭐ IMPORTANT POINTS
+• [important exam point]
+• [important exam point]
+
+Content:
+${contentText}`;
+
+    return await callGroq(systemPrompt, userPrompt, maxTokens, 0.5);
+};
+
+// ─────────────────────────────────────────────────────────────
+// 2. FULL REVISION NOTES CONSOLIDATOR
+// Takes all per-chunk bullet summaries and merges them into
+// one complete revision note covering ALL topics in the document.
+// ─────────────────────────────────────────────────────────────
+const generateCompactRevisionNotes = async (chunkSummaries) => {
+    // Join all summaries — allow up to 12000 chars so no topic is cut off
+    const combined = chunkSummaries.join('\n\n---\n\n').slice(0, 12000);
+
+    const systemPrompt = `You are a university exam revision assistant. Your job is to create comprehensive revision notes that cover EVERY topic from the provided summaries.`;
+
+    const userPrompt = `Below are section-by-section bullet summaries from a university document.
+Merge them into ONE COMPREHENSIVE REVISION NOTE that covers ALL topics.
+
+RULES:
+- Include key points from EVERY section — do not skip any topic.
+- Remove exact duplicates but keep all unique concepts.
+- Use bullet points only. No long paragraphs.
+- Group related concepts under clear headings.
+- Format:
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📚 TOPIC OVERVIEW
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-3–4 lines explaining the main topic simply and clearly.
+• [what this document covers overall]
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎯 IMPORTANT TOPICS
+📖 KEY DEFINITIONS & CONCEPTS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Topic 1
-• Topic 2
-• Topic 3
-• Topic 4
-• Topic 5
-• Topic 6 (add up to 8 if applicable)
+• [Term] – [definition]
+• [Term] – [definition]
+(list ALL terms from all sections)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📖 KEY DEFINITIONS
+📐 FORMULAS & RULES (if any)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Term 1 – simple one-line definition
-• Term 2 – simple one-line definition
-• Term 3 – simple one-line definition
-• Term 4 – simple one-line definition
-• Term 5 – simple one-line definition
+• [Formula / Rule]
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📐 IMPORTANT FORMULAS (if applicable)
+⭐ KEY EXAM POINTS (ALL topics)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Formula 1
-• Formula 2
+• [exam point from section 1]
+• [exam point from section 2]
+• [exam point from section 3]
+(include important points from every section)
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-💡 CONCEPT EXPLANATION
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Key concept 1 explained in 2-3 lines
-• Key concept 2 explained in 2-3 lines
-• Key concept 3 explained in 2-3 lines
-• Key concept 4 explained in 2-3 lines
+Section Summaries to merge:
+${combined}`;
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📝 EXAMPLES
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Example 1 briefly explained
-• Example 2 briefly explained
-• Example 3 briefly explained
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⭐ KEY POINTS FOR EXAMS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Important concept 1 to remember
-• Important concept 2 to remember
-• Important concept 3 to remember
-• Important concept 4 to remember
-• Important concept 5 to remember
-• Important concept 6 to remember (add up to 8 if applicable)
-
-CRITICAL RULES:
-- Aim for 600-800 words total
-- Use bullet points, avoid long paragraphs
-- Focus only on important concepts
-- Make it student-friendly and exam-focused
-- Use simple language a student can understand quickly
-- Skip the formulas section if the topic has none
-- Always include the examples section with 2-3 short examples
-
-Source Content:
-${contentText}
-`;
-    return await callGroq("You are an expert university teacher.", summaryPrompt, maxTokens);
+    // 2000 tokens gives room for comprehensive notes covering all topics
+    return await callGroq(systemPrompt, userPrompt, 2000, 0.5);
 };
 
-/**
- * Generate flashcards (JSON format)
- */
+// ─────────────────────────────────────────────────────────────
+// 3. UNIVERSITY FLASHCARDS (2/5/10 mark format)
+// Uses safeParseJSON for robust parsing.
+// ─────────────────────────────────────────────────────────────
+const generateUniversityFlashcards = async (text) => {
+    // Hard cap — compact notes should be well under this
+    const safeText = text.slice(0, 3000);
+
+    const systemPrompt = `You are a university exam flashcard generator. Return ONLY valid JSON. No markdown. No explanation. No text before or after the JSON.`;
+
+    const userPrompt = `Generate exam-oriented flashcards from the text below.
+
+Return ONLY this exact JSON structure:
+{
+  "twoMark": [
+    { "question": "Define X?", "answer": "X is [2-3 line answer]." },
+    { "question": "Define Y?", "answer": "Y is [2-3 line answer]." },
+    { "question": "What is Z?", "answer": "Z is [2-3 line answer]." },
+    { "question": "Explain W?", "answer": "W is [2-3 line answer]." }
+  ],
+  "fiveMark": [
+    { "question": "Explain A in detail.", "answer": "Introduction: [2 lines].\\nKey Points:\\n• Point 1\\n• Point 2\\n• Point 3\\nConclusion: [1 line]." },
+    { "question": "Describe B.", "answer": "Introduction: [2 lines].\\nKey Points:\\n• Point 1\\n• Point 2\\n• Point 3\\nConclusion: [1 line]." },
+    { "question": "What is C and its uses?", "answer": "Introduction: [2 lines].\\nKey Points:\\n• Point 1\\n• Point 2\\n• Point 3\\nConclusion: [1 line]." }
+  ],
+  "tenMark": [
+    { "question": "Discuss D in detail.", "answer": "Introduction: [3 lines].\\nExplanation:\\n• [point]\\n• [point]\\nApplications:\\n• [point]\\nConclusion: [2 lines]." },
+    { "question": "Explain E with examples.", "answer": "Introduction: [3 lines].\\nExplanation:\\n• [point]\\n• [point]\\nApplications:\\n• [point]\\nConclusion: [2 lines]." }
+  ]
+}
+
+CRITICAL:
+- Return ONLY the JSON object above. No other text.
+- Use \\n for line breaks inside answer strings.
+- Escape all double quotes inside strings as \\".
+- Do NOT include markdown or code fences.
+
+Text:
+${safeText}`;
+
+    const response = await callGroq(systemPrompt, userPrompt, 2000, 0.3);
+
+    try {
+        return safeParseJSON(response, 'object');
+    } catch (e) {
+        console.error('JSON Parse Error in generateUniversityFlashcards:', e.message);
+        console.error('Raw response (first 500 chars):', response.slice(0, 500));
+        throw new Error('Failed to parse flashcards JSON. Please try again.');
+    }
+};
+
+// ─────────────────────────────────────────────────────────────
+// 4. SIMPLE FLASHCARDS (basic Q&A array)
+// ─────────────────────────────────────────────────────────────
 const generateFlashcards = async (text) => {
     const safeText = text.slice(0, 2500);
-    const systemPrompt = `Generate exactly 10 flashcards from the text below.
 
-Return ONLY valid JSON.
-Do NOT include explanation.
-Do NOT include markdown.
-Do NOT include any text before or after JSON.
+    const systemPrompt = `You are a flashcard generator. Return ONLY a valid JSON array. No markdown. No explanation. No text outside the JSON array.`;
 
-Strict format:
+    const userPrompt = `Generate exactly 10 flashcards from the text below.
 
+Return ONLY this JSON array:
 [
-  {
-    "question": "Question text",
-    "answer": "Answer text"
-  }
-]`;
-    const response = await callGroq(systemPrompt, `Text:\n${safeText}`);
+  { "question": "Question text?", "answer": "Answer text." }
+]
+
+CRITICAL:
+- Return ONLY the JSON array. No other text.
+- Escape any double quotes inside strings as \\".
+- Do NOT use markdown or code fences.
+
+Text:
+${safeText}`;
+
+    const response = await callGroq(systemPrompt, userPrompt, 1000, 0.3);
+
     try {
-        const raw = response.trim();
-        const jsonStart = raw.indexOf("[");
-        const jsonEnd = raw.lastIndexOf("]");
-
-        if (jsonStart === -1 || jsonEnd === -1) {
-            throw new Error("Invalid JSON returned from LLM");
-        }
-
-        const jsonString = raw.slice(jsonStart, jsonEnd + 1);
-        return JSON.parse(jsonString);
+        return safeParseJSON(response, 'array');
     } catch (e) {
-        console.error("JSON Parse Error in generateFlashcards:", e.message);
-        throw new Error("Failed to parse flashcards JSON");
+        console.error('JSON Parse Error in generateFlashcards:', e.message);
+        throw new Error('Failed to parse flashcards JSON. Please try again.');
     }
 };
 
-/**
- * Generate multiple choice quiz (JSON format)
- */
+// ─────────────────────────────────────────────────────────────
+// 5. MULTIPLE CHOICE QUIZ
+// ─────────────────────────────────────────────────────────────
 const generateQuiz = async (content, numQuestions = 10) => {
-    const systemPrompt = `You are a strict technical examiner. Generate exactly ${numQuestions} Multiple Choice Questions based strictly on the Source Content below.
+    const safeContent = content.slice(0, 2500);
 
-CRITICAL INSTRUCTIONS:
-1. Each question must have EXACTLY 4 options.
-2. Each question must include an 'explanation' string explaining why the correct answer is correct.
-3. Return ONLY a valid JSON array of objects. NO markdown formatting. NO intro. NO \`\`\`json wrappers.
+    const systemPrompt = `You are a strict technical examiner. Return ONLY a valid JSON array. No markdown. No explanation. No text outside the JSON.`;
 
-Strict JSON Output format:
+    const userPrompt = `Generate exactly ${numQuestions} Multiple Choice Questions from the content below.
+
+Return ONLY this JSON array:
 [
   {
-    "question": "Question text here?",
+    "question": "Question text?",
     "options": ["Option A", "Option B", "Option C", "Option D"],
-    "correctOption": 1, 
-    "explanation": "Explanation for the correct answer..."
+    "correctOption": 0,
+    "explanation": "Brief explanation of why the answer is correct."
   }
 ]
-Note: 'correctOption' must be an integer index between 0 and 3.
+
+CRITICAL:
+- correctOption must be an integer 0-3.
+- Return ONLY the JSON array. No other text.
+- Escape any double quotes inside strings as \\".
+- Do NOT use markdown or code fences.
 
 Source Content:
-${content.slice(0, 2500)}
-`;
-    const response = await callGroq(systemPrompt, "Please generate the multiple choice quiz based strictly on the source content.");
+${safeContent}`;
+
+    const response = await callGroq(systemPrompt, userPrompt, 2000, 0.3);
+
     try {
-        const raw = response.trim();
-        const jsonStart = raw.indexOf("[");
-        const jsonEnd = raw.lastIndexOf("]");
-
-        if (jsonStart === -1 || jsonEnd === -1) {
-            throw new Error("Invalid JSON returned from LLM");
-        }
-
-        const jsonString = raw.slice(jsonStart, jsonEnd + 1);
-        return JSON.parse(jsonString);
+        return safeParseJSON(response, 'array');
     } catch (e) {
-        console.error("JSON Parse Error in generateQuiz:", e.message);
-        throw new Error("Failed to parse quiz JSON");
+        console.error('JSON Parse Error in generateQuiz:', e.message);
+        throw new Error('Failed to parse quiz JSON. Please try again.');
     }
 };
 
-/**
- * Generate structured answer for exam prep (e.g. 5M, 8M, 16M questions)
- */
+// ─────────────────────────────────────────────────────────────
+// 6. STRUCTURED EXAM ANSWER (5M / 8M / 16M)
+// ─────────────────────────────────────────────────────────────
 const generateStructuredAnswer = async (question, marks) => {
     const safeText = question.slice(0, 2500);
-    const systemPrompt = `You are answering an exam question worth ${marks} marks. Structure your answer with an introduction, main body points with clear headings, and a conclusion.`;
-    return await callGroq(systemPrompt, safeText);
+    const systemPrompt = `You are answering a university exam question worth ${marks} marks. Structure your answer with a brief introduction, clearly headed main body points, and a short conclusion. Be concise and exam-appropriate.`;
+    return await callGroq(systemPrompt, safeText, 1000, 0.7);
 };
 
-/**
- * Generate Study Planner
- */
+// ─────────────────────────────────────────────────────────────
+// 7. STUDY PLANNER / REVISION ROADMAP
+// ─────────────────────────────────────────────────────────────
 const generateRevisionRoadmap = async (pdfText, examDate, availableHours) => {
-    const systemPrompt = `You are an expert academic planner. Based on the Source Content below, create a structured day-by-day study schedule leading up to the Target Exam Date: ${examDate}. The student can study for ${availableHours} hours per day.
+    const safeText = pdfText.slice(0, 2500);
 
-CRITICAL INSTRUCTIONS:
-1. Divide topics logically across the available days.
-2. Include at least 1 day for Revision.
-3. Return ONLY a valid JSON object. NO markdown formatting. NO intro. NO \`\`\`json wrappers.
+    const systemPrompt = `You are an expert academic planner. Return ONLY a valid JSON object. No markdown. No explanation.`;
 
-Strict JSON Output format:
+    const userPrompt = `Create a day-by-day study schedule leading up to the exam on ${examDate}. The student can study ${availableHours} hours per day.
+
+Return ONLY this JSON object:
 {
   "examDate": "${examDate}",
   "plan": [
@@ -225,23 +372,30 @@ Strict JSON Output format:
   ]
 }
 
+Rules:
+- Divide topics logically across available days.
+- Include at least 1 revision day.
+- Return ONLY the JSON object. No other text.
+- Do NOT use markdown or code fences.
+
 Source Content:
-${pdfText.slice(0, 2500)}
-`;
-    const response = await callGroq(systemPrompt, "Please generate the study plan based strictly on the source content.");
+${safeText}`;
+
+    const response = await callGroq(systemPrompt, userPrompt, 1500, 0.3);
+
     try {
-        return JSON.parse(response);
+        return safeParseJSON(response, 'object');
     } catch (e) {
-        const cleanJSON = response.replace(/```json/g, '').replace(/```/g, '');
-        return JSON.parse(cleanJSON);
+        console.error('JSON Parse Error in generateRevisionRoadmap:', e.message);
+        throw new Error('Failed to parse roadmap JSON. Please try again.');
     }
 };
 
-/**
- * Generate Question Paper (JSON format)
- */
+// ─────────────────────────────────────────────────────────────
+// 8. QUESTION PAPER GENERATOR
+// ─────────────────────────────────────────────────────────────
 const generateQuestionPaper = async (content, marks, difficulty) => {
-    let structureStr = "";
+    let structureStr = '';
     if (parseInt(marks) === 50) {
         structureStr = `
 - Section A: 5 questions × 2 marks each
@@ -254,14 +408,13 @@ const generateQuestionPaper = async (content, marks, difficulty) => {
 - Section C: 5 questions × 16 marks each`;
     }
 
-    const systemPrompt = `You are an expert University Professor. Generate a formal university-style examination question paper worth ${marks} marks with a ${difficulty} difficulty level.
+    const systemPrompt = `You are a University Professor. Return ONLY a valid JSON object. No markdown. No explanation.`;
 
-CRITICAL INSTRUCTIONS:
-1. ALL questions MUST be strictly derived from the provided Source Content.
-2. ALL questions MUST be descriptive, theory-based, or analytical. ABSOLUTELY NO Multiple Choice Questions (MCQs).
-3. You MUST adhere to this exact structure: ${structureStr}
+    const userPrompt = `Generate a formal university exam question paper worth ${marks} marks at ${difficulty} difficulty.
 
-Return ONLY a valid JSON object matching this strict format, with NO markdown formatting, NO introduction, NO \`\`\`json wrappers:
+Structure: ${structureStr}
+
+Return ONLY this JSON:
 {
   "sections": [
     {
@@ -282,195 +435,82 @@ Return ONLY a valid JSON object matching this strict format, with NO markdown fo
   ]
 }
 
+Rules:
+- ALL questions MUST be from the Source Content.
+- NO Multiple Choice Questions.
+- Return ONLY the JSON object. No other text.
+
 Source Content:
-${content.slice(0, 2500)}
-`;
-    const response = await callGroq(systemPrompt, "Please generate the question paper based on the source content strictly.");
+${content.slice(0, 2500)}`;
+
+    const response = await callGroq(systemPrompt, userPrompt, 2000, 0.3);
+
     try {
-        return JSON.parse(response);
+        return safeParseJSON(response, 'object');
     } catch (e) {
-        const cleanJSON = response.replace(/```json/g, '').replace(/```/g, '');
-        return JSON.parse(cleanJSON);
+        console.error('JSON Parse Error in generateQuestionPaper:', e.message);
+        throw new Error('Failed to parse question paper JSON. Please try again.');
     }
 };
 
-/**
- * Contextual study chat response
- */
+// ─────────────────────────────────────────────────────────────
+// 9. STUDY CHAT (contextual tutor response)
+// ─────────────────────────────────────────────────────────────
 const studyChatResponse = async (context, query) => {
     const safeContext = context.slice(0, 2500);
-    const systemPrompt = `You are a helpful tutor answering a student's question based strictly on their notes context. Context: ${safeContext}`;
-    return await callGroq(systemPrompt, query);
+    const systemPrompt = `You are a helpful tutor answering a student's question based strictly on their notes. Be concise and clear. Context: ${safeContext}`;
+    return await callGroq(systemPrompt, query, 600, 0.7);
 };
 
-/**
- * Generate University-Style Flashcards (2/5/10 marks format)
- */
-const generateUniversityFlashcards = async (text) => {
-    const safeText = text.slice(0, 4000);
-    const systemPrompt = `Generate exam-oriented revision flashcards in UNIVERSITY EXAM FORMAT.
-
-CRITICAL FORMAT RULES:
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-2 MARK QUESTIONS (Generate 4 questions):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Answer format: Maximum 2–3 lines, direct definition or concept explanation. No long paragraphs.
-
-Example Answer Structure:
-"[Term/Concept] is [definition]. It is characterized by [key point]."
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-5 MARK QUESTIONS (Generate 3 questions):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Answer format:
-1. Definition/Introduction (2-3 lines)
-2. Key Points:
-   • Point 1 – short explanation
-   • Point 2 – short explanation
-   • Point 3 – short explanation
-3. Short conclusion sentence
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-10 MARK QUESTIONS (Generate 2 questions):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Answer format:
-1. Introduction (3-4 lines)
-2. Main Explanation with Headings:
-   • Concept Explanation
-   • Components/Techniques
-   • Advantages
-   • Applications/Examples
-3. Conclusion (2 lines)
-
-STRICT JSON OUTPUT:
-
-{
-  "twoMark": [
-    { "question": "Define X", "answer": "X is... [2-3 lines max]" }
-  ],
-  "fiveMark": [
-    { "question": "Explain Y", "answer": "Introduction...\\n\\nKey Points:\\n• Point 1\\n• Point 2\\n• Point 3\\n\\nConclusion..." }
-  ],
-  "tenMark": [
-    { "question": "Discuss Z in detail", "answer": "Introduction...\\n\\nConcept Explanation\\n...\\n\\nAdvantages\\n...\\n\\nConclusion..." }
-  ]
-}
-
-IMPORTANT:
-- Answers MUST follow university exam writing style
-- Use headings and bullet points
-- Avoid continuous paragraphs
-- Keep answers structured and exam-friendly
-- Return ONLY valid JSON, no markdown, no extra text`;
-
-    const response = await callGroq(systemPrompt, `Text:\n${safeText}`, 2000);
-    try {
-        const raw = response.trim();
-        const jsonStart = raw.indexOf("{");
-        const jsonEnd = raw.lastIndexOf("}");
-
-        if (jsonStart === -1 || jsonEnd === -1) {
-            throw new Error("Invalid JSON returned from LLM");
-        }
-
-        const jsonString = raw.slice(jsonStart, jsonEnd + 1);
-        return JSON.parse(jsonString);
-    } catch (e) {
-        console.error("JSON Parse Error in generateUniversityFlashcards:", e.message);
-        throw new Error("Failed to parse flashcards JSON");
-    }
-};
-
-/**
- * Generate notes from text input
- */
+// ─────────────────────────────────────────────────────────────
+// 10. GENERATE NOTES FROM RAW TEXT INPUT
+// ─────────────────────────────────────────────────────────────
 const generateNotesFromText = async (text) => {
-    return await generateSummary(text, 1200);
+    return await generateSummary(text, 800);
 };
 
-/**
- * Generate notes from YouTube transcript
- */
+// ─────────────────────────────────────────────────────────────
+// 11. GENERATE NOTES FROM YOUTUBE TRANSCRIPT
+// ─────────────────────────────────────────────────────────────
 const generateNotesFromYouTube = async (transcript) => {
-    const safeTranscript = transcript.slice(0, 10000);
-    const prompt = `
-You are an expert university teacher creating detailed study notes from a YouTube video transcript.
+    const safeTranscript = transcript.slice(0, 5000);
 
-Generate UNIVERSITY-STYLE STUDY NOTES in the following format (600-800 words):
+    const systemPrompt = `You are a university exam revision assistant creating concise notes from a YouTube video transcript.`;
+
+    const userPrompt = `Generate CONCISE EXAM REVISION NOTES from this YouTube video transcript.
+
+STRICT RULES:
+- Maximum 400-500 words total.
+- Use ONLY bullet points. No long paragraphs.
+- Format:
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📚 TOPIC OVERVIEW
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-3–4 lines explaining the main topic covered in the video.
+• [2-3 bullet overview]
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎯 IMPORTANT TOPICS
+📖 KEY DEFINITIONS & CONCEPTS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Topic 1
-• Topic 2
-• Topic 3
-• Topic 4
-• Topic 5
-• Topic 6 (add up to 8 if applicable)
+• [Term] – [concise definition]
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📖 KEY DEFINITIONS
+⭐ KEY EXAM POINTS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Term 1 – simple one-line definition
-• Term 2 – simple one-line definition
-• Term 3 – simple one-line definition
-• Term 4 – simple one-line definition
-• Term 5 – simple one-line definition
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📐 IMPORTANT FORMULAS (if applicable)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Formula 1
-• Formula 2
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-💡 CONCEPT EXPLANATION
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Key concept 1 explained in 2-3 lines
-• Key concept 2 explained in 2-3 lines
-• Key concept 3 explained in 2-3 lines
-• Key concept 4 explained in 2-3 lines
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📝 EXAMPLES
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Example 1 briefly explained
-• Example 2 briefly explained
-• Example 3 briefly explained
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⭐ KEY POINTS FOR EXAMS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Important concept 1 to remember
-• Important concept 2 to remember
-• Important concept 3 to remember
-• Important concept 4 to remember
-• Important concept 5 to remember
-• Important concept 6 to remember (add up to 8 if applicable)
-
-CRITICAL RULES:
-- Aim for 600-800 words total
-- Use bullet points, avoid long paragraphs
-- Focus only on important concepts
-- Make it student-friendly and exam-focused
-- Use simple language a student can understand quickly
-- Skip the formulas section if the topic has none
-- Always include the examples section with 2-3 short examples
+• [exam point]
 
 Video Transcript:
-${safeTranscript}
-`;
-    return await callGroq("You are an expert university teacher.", prompt, 2000);
+${safeTranscript}`;
+
+    return await callGroq(systemPrompt, userPrompt, 1000, 0.5);
 };
 
+// ─────────────────────────────────────────────────────────────
+// EXPORTS
+// ─────────────────────────────────────────────────────────────
 module.exports = {
     generateSummary,
+    generateCompactRevisionNotes,
     generateFlashcards,
     generateQuiz,
     generateStructuredAnswer,
@@ -480,4 +520,5 @@ module.exports = {
     generateUniversityFlashcards,
     generateNotesFromText,
     generateNotesFromYouTube,
+    safeParseJSON,
 };

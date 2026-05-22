@@ -7,7 +7,7 @@ const Flashcard = require('../models/Flashcard');
 const { addXp, XP_RULES } = require('../services/gamificationService');
 const { analyzeQuizPerformance } = require('../services/analyticsService');
 const { callGroq } = require('../utils/aiService');
-const { generateUniversityFlashcards } = require('../services/llmService');
+const { generateUniversityFlashcards, safeParseJSON } = require('../services/llmService');
 const Note = require('../models/Note');
 const QuestionPaper = require('../models/QuestionPaper');
 
@@ -61,73 +61,44 @@ router.post('/quiz/generate', protect, aiLimiter, async (req, res) => {
         }
 
         console.log("Original summary length:", text.length);
-        const safeText = text.slice(0, 2500);
+        // Notes are now compact (≤600 words) — safe to use full text up to 3000 chars
+        const safeText = text.slice(0, 3000);
+
+        const numQ = numQuestions ? parseInt(numQuestions) : 10;
 
         const messages = [
             {
                 role: 'system',
-                content: `You are a strict technical examiner. Generate exactly ${numQuestions ? parseInt(numQuestions) : 10} Multiple Choice Questions based strictly on the Source Content below.
-
-CRITICAL INSTRUCTIONS:
-1. Each question must have EXACTLY 4 options.
-2. Each question must include an 'explanation' string explaining why the correct answer is correct.
-3. Return ONLY a valid JSON array of objects. NO markdown formatting. NO intro. NO \`\`\`json wrappers.
-
-Strict JSON Output format:
-[
-  {
-    "question": "Question text here?",
-    "options": ["Option A", "Option B", "Option C", "Option D"],
-    "correctOption": 1, 
-    "explanation": "Explanation for the correct answer..."
-  }
-]
-Note: 'correctOption' must be an integer index between 0 and 3.`
+                content: `You are a strict technical examiner. Return ONLY a valid JSON array. No markdown. No explanation. No text outside the JSON.`
             },
             {
                 role: 'user',
-                content: `Source Content:\n${safeText}`
+                content: `Generate exactly ${numQ} Multiple Choice Questions from the content below.
+
+Return ONLY this JSON array:
+[
+  {
+    "question": "Question text?",
+    "options": ["Option A", "Option B", "Option C", "Option D"],
+    "correctOption": 0,
+    "explanation": "Brief explanation of correct answer."
+  }
+]
+
+CRITICAL: correctOption must be integer 0-3. Return ONLY the JSON array. No markdown or code fences.
+
+Source Content:
+${safeText}`
             }
         ];
 
         let generatedQuestions = [];
         try {
-            if (safeText.length > 4000) {
-                const chunks = chunkText(safeText, 3000);
-                for (const chunk of chunks) {
-                    messages[1].content = `Source Content:\n${chunk}`;
-                    const output = await callGroq(messages);
-
-                    const raw = output.trim();
-                    const jsonStart = raw.indexOf("[");
-                    const jsonEnd = raw.lastIndexOf("]");
-
-                    if (jsonStart === -1 || jsonEnd === -1) {
-                        throw new Error("Invalid JSON returned from LLM");
-                    }
-
-                    const jsonString = raw.slice(jsonStart, jsonEnd + 1);
-                    const parsed = JSON.parse(jsonString);
-                    generatedQuestions = generatedQuestions.concat(parsed);
-                }
-            } else {
-                messages[1].content = `Source Content:\n${safeText}`;
-                const output = await callGroq(messages);
-
-                const raw = output.trim();
-                const jsonStart = raw.indexOf("[");
-                const jsonEnd = raw.lastIndexOf("]");
-
-                if (jsonStart === -1 || jsonEnd === -1) {
-                    throw new Error("Invalid JSON returned from LLM");
-                }
-
-                const jsonString = raw.slice(jsonStart, jsonEnd + 1);
-                generatedQuestions = JSON.parse(jsonString);
-            }
+            const output = await callGroq(messages);
+            generatedQuestions = safeParseJSON(output, 'array');
         } catch (err) {
-            console.error("JSON Parse/Generation Error:", err);
-            return res.status(500).json({ error: 'LLM Error: ' + err.message });
+            console.error("Quiz JSON Parse/Generation Error:", err.message);
+            return res.status(500).json({ error: 'AI returned malformed JSON. Please try again.' });
         }
 
         if (!Array.isArray(generatedQuestions)) {
@@ -385,19 +356,7 @@ Example for a 20-mark paper:
                 ];
 
                 const output = await callGroq(messages);
-                const raw = output.trim();
-
-                // Aggressively strip any markdown wrapping
-                const cleaned = raw
-                    .replace(/^```+(?:json)?\s*/i, '')
-                    .replace(/\s*```+$/i, '')
-                    .trim();
-
-                const jsonStart = cleaned.indexOf('{');
-                const jsonEnd = cleaned.lastIndexOf('}');
-                if (jsonStart === -1 || jsonEnd === -1) throw new Error('No JSON found in LLM response');
-
-                const parsed = JSON.parse(cleaned.slice(jsonStart, jsonEnd + 1));
+                const parsed = safeParseJSON(output, 'object');
 
                 // Validate each section has the right count
                 let valid = true;
@@ -555,13 +514,15 @@ router.post('/flashcard/generate', protect, aiLimiter, async (req, res) => {
 
         console.log("Original summary length:", text.length);
 
-        // Use the new university-style flashcard generator
+        // Use the university-style flashcard generator
+        // Notes are now compact — 3000 char limit is ample
+        const textForCards = text.slice(0, 3000);
         let generatedCards = null;
         try {
-            generatedCards = await generateUniversityFlashcards(text);
+            generatedCards = await generateUniversityFlashcards(textForCards);
         } catch (err) {
-            console.error("Flashcard Generation Error:", err);
-            return res.status(500).json({ error: 'LLM Error: ' + err.message });
+            console.error("Flashcard Generation Error:", err.message);
+            return res.status(500).json({ error: 'AI returned malformed JSON for flashcards. Please try again.' });
         }
 
         if (!generatedCards || !generatedCards.twoMark) {
