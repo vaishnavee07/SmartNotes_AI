@@ -1,0 +1,5 @@
+Error: LLM Error generation failed
+    at callGroq (C:\Users\kabil\OneDrive\Desktop\Smartnotes_AI\backend\services\llmService.js:28:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async generateSummary (C:\Users\kabil\OneDrive\Desktop\Smartnotes_AI\backend\services\llmService.js:37:12)
+    at async testFull (C:\Users\kabil\OneDrive\Desktop\Smartnotes_AI\backend\test-llm.js:9:9)
