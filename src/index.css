@@ -1,0 +1,105 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-background min-h-screen text-slate-900 font-sans antialiased relative overflow-x-hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: -1;
+    background: linear-gradient(120deg, #E0E7FF 0%, #E0F2FE 50%, #FFEDD5 100%);
+    background-size: 400% 400%;
+    animation: gradient-xy 15s ease infinite;
+    pointer-events: none;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-display font-semibold text-slate-900;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-white/70 backdrop-blur-xl border border-white/60 rounded-3xl transition-all duration-300;
+    box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
+  }
+
+  .glass-panel:hover {
+    @apply bg-white/80 border-white/80;
+    box-shadow: 0 12px 40px 0 rgba(31, 38, 135, 0.12);
+    transform: translateY(-2px);
+  }
+
+  .btn-primary {
+    @apply bg-gradient-to-r from-primary via-secondary to-tertiary hover:opacity-90 text-white font-medium py-3 px-6 rounded-2xl transition-all duration-300 shadow-lg shadow-secondary/30 active:scale-95 flex items-center justify-center gap-2;
+    background-size: 200% auto;
+  }
+
+  .btn-primary:hover {
+    background-position: right center;
+    box-shadow: 0 0 20px rgba(236, 72, 153, 0.4);
+  }
+
+  .btn-secondary {
+    @apply bg-white/80 backdrop-blur hover:bg-white text-slate-700 border border-slate-200 hover:border-primary/30 font-medium py-3 px-6 rounded-2xl transition-all duration-300 shadow-sm hover:shadow-md active:scale-95 flex items-center justify-center gap-2;
+  }
+
+  .input-field {
+    @apply bg-white/60 backdrop-blur-sm border border-slate-200 rounded-2xl px-5 py-4 w-full text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all duration-300 shadow-inner;
+  }
+
+  .gradient-text {
+    @apply text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary;
+  }
+}
+
+/* Custom Scrollbar for lighter theme */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-300 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-slate-400;
+}
+
+/* ── PDF Export: prevent content from being sliced across pages ── */
+#pdf-content h1,
+#pdf-content h2,
+#pdf-content h3,
+#pdf-content h4,
+#pdf-content strong,
+#pdf-content p,
+#pdf-content li,
+#pdf-content section,
+#pdf-content .pdf-block {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+#pdf-content h1,
+#pdf-content h2,
+#pdf-content h3 {
+  page-break-after: avoid;
+  break-after: avoid;
+}
