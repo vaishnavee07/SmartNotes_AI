@@ -15,10 +15,11 @@ const app = express();
 
 // CORS must be first — before helmet and any route handlers
 const ALLOWED_ORIGINS = [
-    'http://localhost:5173',
-    'http://127.0.0.1:5173',
-    'https://smart-notes-ai-three-azure.vercel.app',
-    'https://smart-notes-six-gamma.vercel.app',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'https://smart-notes-ai-three-azure.vercel.app',
+  'https://smart-notes-six-gamma.vercel.app',
+  'https://smartnotes-frontend-nvrg.onrender.com'
 ];
 
 const corsOptions = {
