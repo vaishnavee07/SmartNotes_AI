@@ -32,18 +32,18 @@ backend/uploads/
 .env
 dist/
 
-# ── Root-level: Prevent orphan frontend scaffold from re-appearing ──────
-src/
-public/
-package.json
-package-lock.json
-vite.config.js
-eslint.config.js
-postcss.config.js
-tailwind.config.js
-index.html
-vite.config.js.timestamp-*
-scratch/
+# ── Root-level ONLY: Prevent orphan frontend scaffold from re-appearing ──────
+/src/
+/public/
+/package.json
+/package-lock.json
+/vite.config.js
+/eslint.config.js
+/postcss.config.js
+/tailwind.config.js
+/index.html
+/vite.config.js.timestamp-*
+/scratch/
 
 # Duplicate/nested project clones — must never be committed
 SmartNotes_AI-1/
