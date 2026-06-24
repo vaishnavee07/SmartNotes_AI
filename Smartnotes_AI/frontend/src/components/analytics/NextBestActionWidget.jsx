@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Sparkles, Clock, ArrowRight, TrendingUp } from 'lucide-react';
-import api from '../../../api/axios';
+import api from '../../api/axios';
 
 const NextBestActionWidget = () => {
     const [action, setAction]         = useState(null);
