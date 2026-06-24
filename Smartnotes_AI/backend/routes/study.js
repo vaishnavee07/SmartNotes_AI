@@ -5,7 +5,7 @@ const { protect } = require('../middleware/auth');
 const Quiz = require('../models/Quiz');
 const Flashcard = require('../models/Flashcard');
 const { addXp, XP_RULES } = require('../services/gamificationService');
-const { analyzeQuizPerformance } = require('../services/analyticsService');
+const { analyzeQuizPerformance, updateTopicPerformance } = require('../services/analyticsService');
 const { callGroq } = require('../utils/aiService');
 const { generateUniversityFlashcards, safeParseJSON } = require('../services/llmService');
 const Note = require('../models/Note');
@@ -179,16 +179,23 @@ router.post('/quiz/:id/submit', protect, async (req, res) => {
         // Add XP
         const gamification = await addXp(req.user.id, 'QUIZ_COMPLETE');
 
-        // Analyze performance async
-        setTimeout(() => {
-            analyzeQuizPerformance(req.user.id).catch(console.error);
-        }, 0);
+        // Analyze performance specifically for this topic
+        let topicPerformanceUpdate = null;
+        try {
+            if (quiz.totalQuestions > 0) {
+                const percentage = (score / quiz.totalQuestions) * 100;
+                topicPerformanceUpdate = await updateTopicPerformance(req.user.id, quiz.topic, percentage);
+            }
+        } catch (perfErr) {
+            console.error('Failed to update topic performance:', perfErr);
+        }
 
         res.json({
             score: score,
             total: quiz.totalQuestions,
             wrongAnswers: wrongAnswers,
-            gamification
+            gamification,
+            topicPerformance: topicPerformanceUpdate
         });
     } catch (error) {
         console.error('Quiz Submit Error:', error);

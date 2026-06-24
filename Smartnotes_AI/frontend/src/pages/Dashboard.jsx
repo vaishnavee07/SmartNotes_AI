@@ -6,6 +6,10 @@ import { Flame, Trophy, Award, Clock, ArrowUpRight, Target } from 'lucide-react'
 import { motion } from 'framer-motion';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import api from '../api/axios';
+import TopicPerformanceWidget from '../components/analytics/TopicPerformanceWidget';
+import NextBestActionWidget from '../components/analytics/NextBestActionWidget';
+import ReadinessCard from '../components/analytics/ReadinessCard';
+import HackathonDemoCard from '../components/analytics/HackathonDemoCard';
 
 const FALLBACK_CHART = [
     { day: 'Mon', minutes: 0 },
@@ -25,6 +29,13 @@ const Dashboard = () => {
     const [studyHoursThisWeek, setStudyHoursThisWeek] = useState(0);
     const [todayMinutes, setTodayMinutes] = useState(0);
     const [todayLabel, setTodayLabel] = useState('0 min');
+    const [progressData, setProgressData] = useState({
+        topicsCompleted: 0,
+        quizAverage: 0,
+        revisionCompletion: 0,
+        readinessScore: 0,
+        readinessLabel: 'Loading...'
+    });
 
     // Safe date formatter
     const safeFormatDate = (dateVal) => {
@@ -50,9 +61,10 @@ const Dashboard = () => {
         };
         const fetchSessionStats = async () => {
             try {
-                const [weeklyRes, todayRes] = await Promise.all([
+                const [weeklyRes, todayRes, progressRes] = await Promise.all([
                     api.get('/activity/weekly'),
-                    api.get('/activity/today')
+                    api.get('/activity/today'),
+                    api.get('/analytics/progress')
                 ]);
                 if (weeklyRes.data && weeklyRes.data.length > 0) {
                     setActivityData(weeklyRes.data);
@@ -62,6 +74,7 @@ const Dashboard = () => {
                 setTodayLabel(todayRes.data.label || (mins >= 60
                     ? `${Math.floor(mins / 60)} hr ${mins % 60 > 0 ? `${mins % 60} min` : ''}`
                     : `${mins} min`));
+                setProgressData(progressRes.data);
             } catch (err) {
                 console.error('Session stats error:', err);
             }
@@ -93,22 +106,65 @@ const Dashboard = () => {
                     <p className="text-slate-500 font-medium text-lg">Here's your study progress and AI generated plan.</p>
                 </header>
 
-                {/* Stats Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-10">
+                {/* Stats Grid - Top Row */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
                     <StatCard
-                        icon={<Flame size={28} className="text-white" />}
-                        title="Day Streak"
-                        value={user?.streak || 0}
-                        subtitle="Keep the fire burning!"
-                        gradient="from-orange-400 to-red-500"
+                        icon={<Target size={28} className="text-white" />}
+                        title="Readiness Score"
+                        value={`${progressData.readinessScore}/100`}
+                        subtitle={progressData.readinessLabel}
+                        gradient="from-emerald-400 to-teal-500"
                         delay={0.1}
                     />
+                    <StatCard
+                        icon={<Trophy size={28} className="text-white" />}
+                        title="Quiz Average"
+                        value={`${progressData.quizAverage}%`}
+                        subtitle="Across all topics"
+                        gradient="from-blue-400 to-indigo-500"
+                        delay={0.2}
+                    />
+                    <StatCard
+                        icon={<Flame size={28} className="text-white" />}
+                        title="Study Streak"
+                        value={`${user?.streak || 0} Days`}
+                        subtitle="Keep the fire burning!"
+                        gradient="from-orange-400 to-red-500"
+                        delay={0.3}
+                    />
+                    <StatCard
+                        icon={<Clock size={28} className="text-white" />}
+                        title="Study Time"
+                        value={todayLabel}
+                        subtitle="Today"
+                        gradient="from-fuchsia-400 to-purple-500"
+                        delay={0.4}
+                    />
+                </div>
 
+                {/* Stats Grid - Bottom Row */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+                    <StatCard
+                        icon={<Award size={28} className="text-white" />}
+                        title="Topics Completed"
+                        value={progressData.topicsCompleted}
+                        subtitle="Mastered & learned"
+                        gradient="from-indigo-400 to-cyan-500"
+                        delay={0.5}
+                    />
+                    <StatCard
+                        icon={<ArrowUpRight size={28} className="text-white" />}
+                        title="Revision Completion"
+                        value={`${progressData.revisionCompletion}%`}
+                        subtitle="Based on roadmap goals"
+                        gradient="from-rose-400 to-pink-500"
+                        delay={0.6}
+                    />
                     {/* Unique XP Circular Card */}
                     <motion.div
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: 0.2 }}
+                        transition={{ delay: 0.7 }}
                         className="glass-panel p-6 flex items-center justify-between group relative overflow-hidden"
                     >
                         <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-secondary/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
@@ -141,23 +197,6 @@ const Dashboard = () => {
                             </div>
                         </div>
                     </motion.div>
-
-                    <StatCard
-                        icon={<Clock size={28} className="text-white" />}
-                        title="Study Time"
-                        value={todayLabel}
-                        subtitle="Today"
-                        gradient="from-blue-400 to-indigo-500"
-                        delay={0.3}
-                    />
-                    <StatCard
-                        icon={<Award size={28} className="text-white" />}
-                        title="Badges"
-                        value={user?.badges?.length || 0}
-                        subtitle="Achieved"
-                        gradient="from-fuchsia-400 to-purple-500"
-                        delay={0.4}
-                    />
                 </div>
 
                 {/* Content Modules */}
@@ -266,33 +305,14 @@ const Dashboard = () => {
                     </div>
 
                     <div className="space-y-8">
-                        {/* Weak Topics Widget */}
-                        <motion.section
-                            initial={{ opacity: 0, x: 20 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: 0.6 }}
-                            className="glass-panel p-6 relative overflow-hidden group"
-                        >
-                            <div className="absolute top-0 right-0 w-32 h-32 bg-error/5 rounded-full blur-3xl group-hover:bg-error/10 transition-colors"></div>
-                            <h2 className="text-xl font-display font-bold mb-5 flex items-center gap-2">
-                                <span className="w-2 h-6 rounded-full bg-error block"></span>
-                                Needs Attention
-                            </h2>
-                            {user?.weakTopics?.length > 0 ? (
-                                <div className="flex flex-wrap gap-2">
-                                    {user.weakTopics.map(topic => (
-                                        <span key={topic} className="px-4 py-2 bg-white/50 text-error backdrop-blur-sm rounded-xl text-sm font-bold border border-error/20 shadow-sm hover:shadow-md hover:scale-105 transition-all cursor-pointer">
-                                            {topic}
-                                        </span>
-                                    ))}
-                                </div>
-                            ) : (
-                                <div className="bg-success/5 border border-success/20 rounded-2xl p-4 flex items-start gap-3">
-                                    <div className="p-2 bg-success/20 rounded-lg text-success shrink-0"><Award size={18} /></div>
-                                    <p className="text-slate-800 text-sm font-medium">You're doing great! No weak topics detected yet.</p>
-                                </div>
-                            )}
-                        </motion.section>
+                        {/* Phase 4 — Exam Readiness Score Card */}
+                        <ReadinessCard />
+
+                        {/* Next Best Action Widget */}
+                        <NextBestActionWidget />
+
+                        {/* Topic Performance Widget */}
+                        <TopicPerformanceWidget />
 
                         {/* Badges Earned */}
                         <motion.section
@@ -332,6 +352,16 @@ const Dashboard = () => {
                     </div>
 
                 </div>
+
+                {/* Phase 4 — Hackathon Demo Section */}
+                <motion.div
+                    initial={{ opacity: 0, y: 30 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.8 }}
+                    className="mt-10"
+                >
+                    <HackathonDemoCard />
+                </motion.div>
             </main>
         </motion.div>
     );

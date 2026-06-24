@@ -4,7 +4,7 @@ const planDaySchema = new mongoose.Schema({
     day: { type: String, required: true },
     topics: [{ type: String }],
     hours: { type: Number, required: true },
-    status: { type: String, enum: ['pending', 'in_progress', 'completed'], default: 'pending' },
+    status: { type: String, enum: ['pending', 'in_progress', 'completed', 'exam', 'revision'], default: 'pending' },
     startedAt: { type: Date, default: null },
     completedAt: { type: Date, default: null }
 });

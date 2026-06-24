@@ -88,34 +88,59 @@ router.post('/upload', protect, upload.single('file'), async (req, res) => {
                 finalSummary = await generateSummary(rawContent.slice(0, 15000), 1200);
                 console.log(`[Upload] Notes ready: ${finalSummary.length} chars`);
 
-            // ── PARALLEL PATH: large doc → chunk in parallel ───
+            // ── SEQUENTIAL PATH: large doc → process chunks one by one ───
             } else {
                 const chunks = chunkText(rawContent, 8000);
-                console.log(`[Upload] Large doc (${rawContent.length} chars) → ${chunks.length} chunks processed in parallel`);
+                console.log(`[Upload] Large doc (${rawContent.length} chars) → ${chunks.length} chunks. Processing sequentially with rate limit protection.`);
 
-                // Fire all chunk summarisation calls simultaneously.
-                // Stagger by 200ms each to avoid burst rate-limit spikes
-                // while still running essentially in parallel.
-                const chunkPromises = chunks.map((chunk, i) =>
-                    new Promise(resolve => setTimeout(resolve, i * 200))
-                        .then(() => generateSummary(chunk, 800))
-                        .catch(err => {
-                            console.error(`[Upload] Chunk ${i + 1} failed:`, err.message);
-                            return null; // don't let one failure kill everything
-                        })
-                );
+                const chunkSummaries = [];
+                for (let i = 0; i < chunks.length; i++) {
+                    console.log(`[Upload] Processing chunk ${i + 1}/${chunks.length}...`);
+                    
+                    let success = false;
+                    let retries = 0;
+                    const maxRetries = 3;
 
-                const results = await Promise.all(chunkPromises);
-                const chunkSummaries = results.filter(Boolean); // drop any nulls
+                    while (!success && retries <= maxRetries) {
+                        try {
+                            if (i > 0) {
+                                // Add 3s base delay between chunks to respect TPM/RPM limits
+                                await new Promise(resolve => setTimeout(resolve, 3000));
+                            }
+                            
+                            const summary = await generateSummary(chunks[i], 800);
+                            if (summary) {
+                                chunkSummaries.push(summary);
+                                success = true;
+                                console.log(`[Upload] Chunk ${i + 1} processed successfully.`);
+                            } else {
+                                throw new Error("Empty summary returned by LLM.");
+                            }
+                        } catch (err) {
+                            retries++;
+                            console.error(`[Upload] Chunk ${i + 1} failed (Attempt ${retries}/${maxRetries + 1}):`, err.message);
+                            
+                            if (retries <= maxRetries) {
+                                const backoff = retries * 5000;
+                                console.log(`[Upload] Rate limit protection: waiting ${backoff}ms before retry...`);
+                                await new Promise(resolve => setTimeout(resolve, backoff));
+                            } else {
+                                console.error(`[Upload] Chunk ${i + 1} permanently failed after retries.`);
+                            }
+                        }
+                    }
+                }
+
                 console.log(`[Upload] ${chunkSummaries.length}/${chunks.length} chunks summarised`);
 
                 if (chunkSummaries.length === 0) {
-                    finalSummary = 'Could not generate summary. Please try again.';
+                    finalSummary = 'Could not generate summary due to AI rate limits. Please try again.';
                 } else if (chunkSummaries.length === 1) {
                     finalSummary = chunkSummaries[0];
                 } else {
-                    // Consolidation call — merge all chunk summaries into one note
                     console.log(`[Upload] Consolidating ${chunkSummaries.length} summaries...`);
+                    // Delay before consolidation to avoid hitting limit
+                    await new Promise(resolve => setTimeout(resolve, 4000));
                     finalSummary = await generateCompactRevisionNotes(chunkSummaries);
                     console.log(`[Upload] Final note ready: ${finalSummary.length} chars`);
                 }

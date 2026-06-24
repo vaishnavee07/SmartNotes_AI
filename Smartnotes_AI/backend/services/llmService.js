@@ -222,12 +222,11 @@ ${combined}`;
 // Uses safeParseJSON for robust parsing.
 // ─────────────────────────────────────────────────────────────
 const generateUniversityFlashcards = async (text) => {
-    // Hard cap — compact notes should be well under this
     const safeText = text.slice(0, 3000);
 
     const systemPrompt = `You are a university exam flashcard generator. Return ONLY valid JSON. No markdown. No explanation. No text before or after the JSON.`;
 
-    const userPrompt = `Generate exam-oriented flashcards from the text below.
+    const userPrompt = `Generate exam-oriented flashcards from the text below. Ensure the JSON is completely valid and properly closed.
 
 Return ONLY this exact JSON structure:
 {
@@ -250,6 +249,7 @@ Return ONLY this exact JSON structure:
 
 CRITICAL:
 - Return ONLY the JSON object above. No other text.
+- Do NOT cut off the JSON early. Ensure all brackets and braces are closed.
 - Use \\n for line breaks inside answer strings.
 - Escape all double quotes inside strings as \\".
 - Do NOT include markdown or code fences.
@@ -257,14 +257,20 @@ CRITICAL:
 Text:
 ${safeText}`;
 
-    const response = await callGroq(systemPrompt, userPrompt, 2000, 0.3);
-
-    try {
-        return safeParseJSON(response, 'object');
-    } catch (e) {
-        console.error('JSON Parse Error in generateUniversityFlashcards:', e.message);
-        console.error('Raw response (first 500 chars):', response.slice(0, 500));
-        throw new Error('Failed to parse flashcards JSON. Please try again.');
+    let attempts = 0;
+    const maxAttempts = 3;
+    
+    while (attempts < maxAttempts) {
+        attempts++;
+        try {
+            const response = await callGroq(systemPrompt, userPrompt, 2500, 0.3);
+            return safeParseJSON(response, 'object');
+        } catch (e) {
+            console.error(`[Flashcard] Attempt ${attempts} failed:`, e.message);
+            if (attempts >= maxAttempts) {
+                throw new Error('Failed to parse flashcards JSON after retries. Please try again.');
+            }
+        }
     }
 };
 
@@ -375,19 +381,27 @@ Return ONLY this JSON object:
 Rules:
 - Divide topics logically across available days.
 - Include at least 1 revision day.
+- The "status" field MUST be EXACTLY one of the following strings: "pending", "in_progress", "completed", "exam", or "revision". Do NOT use any other value.
 - Return ONLY the JSON object. No other text.
 - Do NOT use markdown or code fences.
 
 Source Content:
 ${safeText}`;
 
-    const response = await callGroq(systemPrompt, userPrompt, 1500, 0.3);
-
-    try {
-        return safeParseJSON(response, 'object');
-    } catch (e) {
-        console.error('JSON Parse Error in generateRevisionRoadmap:', e.message);
-        throw new Error('Failed to parse roadmap JSON. Please try again.');
+    let attempts = 0;
+    const maxAttempts = 3;
+    
+    while (attempts < maxAttempts) {
+        attempts++;
+        try {
+            const response = await callGroq(systemPrompt, userPrompt, 1500, 0.3);
+            return safeParseJSON(response, 'object');
+        } catch (e) {
+            console.error(`[Planner] Attempt ${attempts} failed:`, e.message);
+            if (attempts >= maxAttempts) {
+                throw new Error('Failed to parse roadmap JSON after retries. Please try again.');
+            }
+        }
     }
 };
 

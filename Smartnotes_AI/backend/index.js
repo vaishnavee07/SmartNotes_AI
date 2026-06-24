@@ -61,6 +61,7 @@ const gamificationRoutes = require('./routes/gamification');
 const goalsRoutes = require('./routes/goals');
 const sessionsRoutes = require('./routes/sessions');
 const activityRoutes = require('./routes/activity');
+const analyticsRoutes = require('./routes/analytics');
 
 // Mount routes
 app.use('/api/auth', authRoutes);
@@ -71,6 +72,7 @@ app.use('/api/gamification', gamificationRoutes);
 app.use('/api/goals', goalsRoutes);
 app.use('/api/sessions', sessionsRoutes);
 app.use('/api/activity', activityRoutes);
+app.use('/api/analytics', analyticsRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
